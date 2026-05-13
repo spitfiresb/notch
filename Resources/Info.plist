@@ -28,6 +28,8 @@
 	<string>NSApplication</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Notch needs to send Apple Events to Spotify so it can show the current song and control playback from the dynamic island.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Notch listens to the system audio mix so the bars in the notch can react to whatever you're playing.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>A personal macOS notch / dynamic island.</string>
 </dict>

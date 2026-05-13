@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(env.notch)
             .environmentObject(env.music)
             .environmentObject(env.screenshots)
+            .environmentObject(env.audioMeter)
         let panel = NotchPanel(rootView: root)
         self.panel = panel
         panel.show()
@@ -36,6 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if !UserDefaults.standard.bool(forKey: "didCompleteOnboarding") {
             showOnboarding()
+        } else {
+            // Brief "hello" — open the notch on launch so it's discoverable without hovering.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.env.notch.presentLaunchGreeting()
+            }
         }
     }
 

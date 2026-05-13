@@ -7,9 +7,11 @@ final class AppEnvironment: ObservableObject {
     let notch = NotchState()
     let music = NowPlayingManager()
     let screenshots = ScreenshotWatcher()
+    let audioMeter = AudioMeter()
 
     func start() {
         music.start()
+        audioMeter.start()
         ScreenshotWatcher.disableSystemFloatingThumbnail()
         screenshots.onNewScreenshot = { [weak self] url in
             ScreenshotWatcher.copyToPasteboard(url)
@@ -82,6 +84,17 @@ final class NotchState: ObservableObject {
         }
         closeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Open the notch briefly on app launch so it's visible without a hover, then
+    /// auto-collapse. Pinned so the hover-watcher doesn't slam it shut immediately.
+    func presentLaunchGreeting(duration: TimeInterval = 1.8) {
+        closeWork?.cancel(); closeWork = nil
+        toast = nil
+        tab = .music
+        isOpen = true
+        pinnedUntil = Date().addingTimeInterval(duration)
+        scheduleClose(after: duration + 0.1)
     }
 
     /// Pop the notch open with a "screenshot copied" banner; auto-collapses after a beat.

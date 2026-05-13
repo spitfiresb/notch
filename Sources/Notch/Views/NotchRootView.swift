@@ -77,40 +77,83 @@ struct NotchRootView: View {
     }
 }
 
-/// What's visible when the notch is collapsed — just the dancing bars on the right.
-/// Padding/anchoring match the music tab's bars exactly so the cross-fade between
-/// "peek" and "tab" lands the bars on the same pixel — they look like one element
-/// staying put while the rest of the tab fades in around them.
+/// What's visible when the notch is collapsed — album art on the left, dancing bars
+/// on the right. Padding/anchoring match the music tab's bars exactly so the cross-fade
+/// between "peek" and "tab" lands the bars on the same pixel — they look like one
+/// element staying put while the rest of the tab fades in around them.
 private struct CollapsedPeek: View {
     @EnvironmentObject private var music: NowPlayingManager
 
-    private var showing: Bool { music.info.isPlaying }
+    /// Show whenever there's *any* track loaded; we just freeze the bars when paused
+    /// so the user can still see what's playing at a glance.
+    private var showing: Bool { music.info.hasContent }
 
     var body: some View {
-        HStack {
-            Spacer(minLength: 0)
-            DancingBars(color: music.info.accentColor ?? .white)
+        HStack(spacing: 0) {
+            artwork
                 .frame(width: 14, height: 14)
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(.white.opacity(0.12)))
+                .opacity(music.info.artwork != nil ? 1 : 0)
+            Spacer(minLength: 0)
+            DancingBars(color: music.info.accentColor ?? .white,
+                        isPlaying: music.info.isPlaying)
+                .frame(width: 20, height: 14)
         }
         .padding(.horizontal, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .opacity(showing ? 1 : 0)
     }
+
+    @ViewBuilder private var artwork: some View {
+        if let image = music.info.artwork {
+            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+        } else {
+            Color.clear
+        }
+    }
 }
 
-/// Three bars whose heights wiggle independently every frame — driven by
-/// `TimelineView(.animation)` so it's continuous, not a stepped wave. Tinted with
-/// the album-art accent.
+/// Six bars whose heights track either real audio (via `AudioMeter`'s six band levels,
+/// low frequencies first) or, when no tap signal is available, a continuous sine wiggle.
+/// When paused, the bars freeze at a low resting height.
 struct DancingBars: View {
     var color: Color = .white
+    var isPlaying: Bool = true
+
+    @EnvironmentObject private var meter: AudioMeter
+
+    /// Low resting height when paused / silent — short, equal capsules.
+    private static let restHeight: CGFloat = 0.22
+    private static let barWidth: CGFloat = 1.8
+    private static let spacing: CGFloat = 1.3
+    private static let count = AudioMeter.bandCount
 
     var body: some View {
-        TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            HStack(alignment: .center, spacing: 2) {
-                bar(height: scale(t, phase: 0.0))
-                bar(height: scale(t, phase: 1.7))
-                bar(height: scale(t, phase: 3.4))
+        if !isPlaying {
+            HStack(alignment: .center, spacing: Self.spacing) {
+                ForEach(0..<Self.count, id: \.self) { _ in
+                    bar(height: Self.restHeight)
+                }
+            }
+        } else if meter.isRunning {
+            // Real audio — re-renders every time the meter publishes new levels.
+            HStack(alignment: .center, spacing: Self.spacing) {
+                ForEach(0..<Self.count, id: \.self) { i in
+                    bar(height: meter.bars[i])
+                }
+            }
+            .animation(.easeOut(duration: 0.06), value: meter.bars)
+        } else {
+            // Fallback: synthesized wiggle so playing-without-permission still feels alive.
+            TimelineView(.animation) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                HStack(alignment: .center, spacing: Self.spacing) {
+                    ForEach(0..<Self.count, id: \.self) { i in
+                        bar(height: scale(t, phase: Double(i) * 1.1))
+                    }
+                }
             }
         }
     }
@@ -118,9 +161,9 @@ struct DancingBars: View {
     private func bar(height: CGFloat) -> some View {
         Capsule(style: .continuous)
             .fill(color)
-            .frame(width: 2.5)
+            .frame(width: Self.barWidth)
             .frame(maxHeight: .infinity)
-            .scaleEffect(y: height, anchor: .center)
+            .scaleEffect(y: max(Self.restHeight, height), anchor: .center)
     }
 
     /// Two summed sines at different frequencies → an organic, non-repeating wiggle.

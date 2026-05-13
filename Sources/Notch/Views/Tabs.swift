@@ -29,9 +29,10 @@ struct MusicTabView: View {
                 }
                 Spacer(minLength: 4)
 
-                if info.isPlaying {
-                    DancingBars(color: info.accentColor ?? .white)
-                        .frame(width: 14, height: 14)
+                if info.hasContent {
+                    DancingBars(color: info.accentColor ?? .white,
+                                isPlaying: info.isPlaying)
+                        .frame(width: 20, height: 14)
                 }
             }
 
