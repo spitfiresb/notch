@@ -4,8 +4,8 @@ import ImageIO
 // MARK: - Music
 
 struct MusicTabView: View {
-    @EnvironmentObject private var env: AppEnvironment
-    private var info: NowPlayingInfo { env.music.info }
+    @EnvironmentObject private var music: NowPlayingManager
+    private var info: NowPlayingInfo { music.info }
 
     var body: some View {
         HStack(spacing: 14) {
@@ -23,9 +23,9 @@ struct MusicTabView: View {
                 }
                 Spacer(minLength: 6)
                 HStack(spacing: 24) {
-                    control("backward.fill", size: 15) { env.music.previous() }
-                    control(info.isPlaying ? "pause.fill" : "play.fill", size: 20) { env.music.togglePlayPause() }
-                    control("forward.fill", size: 15) { env.music.next() }
+                    control("backward.fill", size: 15) { music.previous() }
+                    control(info.isPlaying ? "pause.fill" : "play.fill", size: 20) { music.togglePlayPause() }
+                    control("forward.fill", size: 15) { music.next() }
                     Spacer()
                     if !info.source.isEmpty {
                         Text(info.source).font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
@@ -60,15 +60,15 @@ struct MusicTabView: View {
 // MARK: - Screenshots
 
 struct ScreenshotTabView: View {
-    @EnvironmentObject private var env: AppEnvironment
+    @EnvironmentObject private var screenshots: ScreenshotWatcher
 
     var body: some View {
-        if env.screenshots.shots.isEmpty {
+        if screenshots.shots.isEmpty {
             EmptyTab(symbol: "camera.viewfinder", text: "Screenshots will show up here")
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(env.screenshots.shots, id: \.self) { url in
+                    ForEach(screenshots.shots, id: \.self) { url in
                         ScreenshotThumb(url: url)
                     }
                 }
@@ -129,16 +129,16 @@ private struct ScreenshotThumb: View {
 // MARK: - Clipboard
 
 struct ClipboardTabView: View {
-    @EnvironmentObject private var env: AppEnvironment
+    @EnvironmentObject private var clipboard: ClipboardWatcher
 
     var body: some View {
-        if env.clipboard.items.isEmpty {
+        if clipboard.items.isEmpty {
             EmptyTab(symbol: "doc.on.clipboard", text: "Copied text & images land here")
         } else {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 6) {
-                    ForEach(env.clipboard.items) { item in
-                        Button { env.clipboard.copy(item) } label: { row(for: item) }
+                    ForEach(clipboard.items) { item in
+                        Button { clipboard.copy(item) } label: { row(for: item) }
                             .buttonStyle(.plain)
                     }
                 }

@@ -1,36 +1,30 @@
 import SwiftUI
 
-/// The black blob: a tiny pill when idle, an expanding panel with tabs on hover
-/// (or when something — like a new screenshot — wants attention).
+/// The black blob: a tiny pill when idle, an expanding panel with tabs when open.
+/// The view always fills the hosting window — the *window* is what changes size
+/// (driven by `NotchState.size` from `AppDelegate`); this view just paints the
+/// blob and swaps its contents.
 struct NotchRootView: View {
-    @EnvironmentObject private var env: AppEnvironment
-    private var notch: NotchState { env.notch }
+    @EnvironmentObject private var notch: NotchState
 
-    private var anim: Animation { .spring(response: 0.34, dampingFraction: 0.82) }
+    private var anim: Animation { .spring(response: 0.32, dampingFraction: 0.85) }
+    private var collapsedRadius: CGFloat { min(10, ScreenMetrics.notchSize.height / 2) }
 
     var body: some View {
         ZStack(alignment: .top) {
-            NotchShape(cornerInset: 8, bottomRadius: notch.isOpen ? 22 : min(10, ScreenMetrics.notchSize.height / 2))
-                .fill(.black)
-                .overlay(
-                    NotchShape(cornerInset: 8, bottomRadius: notch.isOpen ? 22 : min(10, ScreenMetrics.notchSize.height / 2))
-                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(notch.isOpen ? 0.35 : 0), radius: 18, y: 8)
-
+            shape.fill(.black)
+            shape.stroke(Color.white.opacity(0.06), lineWidth: 1)
             content
         }
-        .frame(width: notch.size.width, height: notch.size.height, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(anim, value: notch.isOpen)
-        .animation(anim, value: notch.size)
-        .onHover { hovering in
-            if hovering {
-                notch.cancelScheduledClose()
-                if !notch.isOpen { notch.open() }
-            } else if notch.isOpen {
-                notch.scheduleClose(after: 0.35)
-            }
-        }
+        .animation(anim, value: notch.tab)
+        // Hover open/close is driven by AppDelegate's cursor watcher (not `.onHover`),
+        // so it stays stable while the window resizes.
+    }
+
+    private var shape: NotchShape {
+        NotchShape(cornerInset: 8, bottomRadius: notch.isOpen ? 22 : collapsedRadius)
     }
 
     @ViewBuilder private var content: some View {
@@ -44,7 +38,7 @@ struct NotchRootView: View {
             .padding(14)
             .padding(.top, max(0, ScreenMetrics.notchSize.height - 14))
             .foregroundStyle(.white)
-            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+            .transition(.opacity)
         } else {
             CollapsedPeek()
         }
@@ -53,7 +47,7 @@ struct NotchRootView: View {
     private var tabBar: some View {
         HStack(spacing: 6) {
             ForEach(NotchState.Tab.allCases) { tab in
-                Button { withAnimation(anim) { notch.open(tab: tab) } } label: {
+                Button { notch.open(tab: tab) } label: {
                     Image(systemName: tab.symbol)
                         .font(.system(size: 13, weight: .medium))
                         .frame(width: 34, height: 26)
@@ -79,27 +73,25 @@ struct NotchRootView: View {
 
 /// What's visible when the notch is collapsed — a hint of the current track.
 private struct CollapsedPeek: View {
-    @EnvironmentObject private var env: AppEnvironment
+    @EnvironmentObject private var music: NowPlayingManager
 
     var body: some View {
         HStack(spacing: 8) {
             artwork
                 .frame(width: 18, height: 18)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
-                .opacity(env.music.info.hasContent ? 1 : 0)
+                .opacity(music.info.hasContent ? 1 : 0)
             Spacer(minLength: 0)
             EqualizerBars()
                 .frame(width: 15, height: 11)
-                .opacity(env.music.info.hasContent && env.music.info.isPlaying ? 0.9 : 0)
+                .opacity(music.info.hasContent && music.info.isPlaying ? 0.9 : 0)
         }
         .padding(.horizontal, 13)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, max(0, (ScreenMetrics.notchSize.height - 18) / 2))
-        .padding(.bottom, max(0, (ScreenMetrics.notchSize.height - 18) / 2))
     }
 
     @ViewBuilder private var artwork: some View {
-        if let image = env.music.info.artwork {
+        if let image = music.info.artwork {
             Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
         } else {
             Color.white.opacity(0.15)

@@ -42,6 +42,10 @@ final class NotchState: ObservableObject {
     let collapsedSize = ScreenMetrics.notchSize
     let expandedSize = CGSize(width: 580, height: 300)
 
+    /// While set & in the future, the hover-watcher won't auto-collapse (used by `flash`).
+    private(set) var pinnedUntil: Date?
+    var isPinnedOpen: Bool { (pinnedUntil ?? .distantPast) > Date() }
+
     private var closeWork: DispatchWorkItem?
 
     init() { size = ScreenMetrics.notchSize }
@@ -55,6 +59,7 @@ final class NotchState: ObservableObject {
 
     func close() {
         closeWork?.cancel(); closeWork = nil
+        pinnedUntil = nil
         isOpen = false
         size = collapsedSize
     }
@@ -62,15 +67,24 @@ final class NotchState: ObservableObject {
     func cancelScheduledClose() { closeWork?.cancel(); closeWork = nil }
 
     func scheduleClose(after delay: TimeInterval) {
-        closeWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.close() }
+        guard isOpen, closeWork == nil else { return }   // already counting down — leave it
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.closeWork = nil
+            if self.isPinnedOpen {
+                self.scheduleClose(after: max(0.1, (self.pinnedUntil ?? Date()).timeIntervalSinceNow + 0.05))
+            } else {
+                self.close()
+            }
+        }
         closeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    /// Pop open on a tab and auto-collapse shortly after (Dynamic-Island style).
+    /// Pop open on a tab and keep it open for a few seconds (Dynamic-Island style).
     func flash(tab: Tab) {
         open(tab: tab)
-        scheduleClose(after: 5)
+        pinnedUntil = Date().addingTimeInterval(5)
+        scheduleClose(after: 5.1)
     }
 }

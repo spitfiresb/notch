@@ -3,7 +3,10 @@ import SwiftUI
 
 /// Geometry of the (real or simulated) notch on the active screen.
 enum ScreenMetrics {
-    static var screen: NSScreen? { NSScreen.main ?? NSScreen.screens.first }
+    /// The screen that owns the menu bar (its frame origin is (0, 0)).
+    static var screen: NSScreen? {
+        NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main ?? NSScreen.screens.first
+    }
 
     static var hasRealNotch: Bool {
         guard let s = screen else { return false }
@@ -55,11 +58,11 @@ struct NotchShape: Shape {
     }
 }
 
-/// Borderless, click-through-where-transparent floating panel pinned to the top centre
-/// of the screen. Resizes itself (kept top-anchored) whenever NotchState changes its size.
+/// Borderless floating panel pinned to the top centre of the screen.
+/// Resizes itself (kept top-anchored & centred) whenever NotchState changes its size.
 final class NotchPanel: NSPanel {
     init(rootView: some View) {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: ScreenMetrics.notchSize.width, height: ScreenMetrics.notchSize.height),
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 200, height: 32),
                    styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
 
@@ -74,25 +77,30 @@ final class NotchPanel: NSPanel {
         hidesOnDeactivate = false
         ignoresMouseEvents = false
 
-        let hosting = NSHostingController(rootView: rootView)
-        hosting.sizingOptions = []          // we size the window ourselves
-        contentViewController = hosting
+        let hosting = NSHostingView(rootView: rootView)
+        hosting.autoresizingMask = [.width, .height]
+        contentView = hosting
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    /// Don't let AppKit shove the window down to keep it below the menu bar —
+    /// the notch lives *at* the screen edge.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+
+    /// Snap (no window animation — the SwiftUI content animates the visible blob instead)
+    /// the panel to `contentSize`, kept top-anchored and horizontally centred.
     func apply(contentSize: CGSize) {
         guard let screen = ScreenMetrics.screen else { return }
         let sf = screen.frame
-        let origin = NSPoint(x: sf.midX - contentSize.width / 2,
-                             y: sf.maxY - contentSize.height)
-        let newFrame = NSRect(origin: origin, size: contentSize)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.32
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            animator().setFrame(newFrame, display: true)
-        }
+        let newFrame = NSRect(x: (sf.minX + sf.maxX) / 2 - contentSize.width / 2,
+                              y: sf.maxY - contentSize.height,
+                              width: contentSize.width,
+                              height: contentSize.height)
+        setFrame(newFrame, display: true)
     }
 
     func show() {
