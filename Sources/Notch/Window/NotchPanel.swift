@@ -24,6 +24,11 @@ enum ScreenMetrics {
         }
         return CGSize(width: 220, height: 32)
     }
+
+    /// Size of the expanded panel. The window is *always* this size (top-centre,
+    /// transparent around the blob when collapsed) so the open/close grow can be a
+    /// pure, smooth SwiftUI animation with no window-resize jank.
+    static let expandedSize = CGSize(width: 300, height: 128)
 }
 
 /// The classic macOS notch silhouette: flat against the screen top with little
@@ -58,11 +63,12 @@ struct NotchShape: Shape {
     }
 }
 
-/// Borderless floating panel pinned to the top centre of the screen.
-/// Resizes itself (kept top-anchored & centred) whenever NotchState changes its size.
+/// Borderless floating panel pinned to the top centre of the screen. Fixed size
+/// (`ScreenMetrics.expandedSize`); the blob inside grows/shrinks with SwiftUI.
+/// Mouse events are ignored while collapsed so the menu bar underneath stays usable.
 final class NotchPanel: NSPanel {
     init(rootView: some View) {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 200, height: 32),
+        super.init(contentRect: NSRect(origin: .zero, size: ScreenMetrics.expandedSize),
                    styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
 
@@ -75,7 +81,7 @@ final class NotchPanel: NSPanel {
         isMovableByWindowBackground = false
         isMovable = false
         hidesOnDeactivate = false
-        ignoresMouseEvents = false
+        ignoresMouseEvents = true   // collapsed at launch
 
         let hosting = NSHostingView(rootView: rootView)
         hosting.autoresizingMask = [.width, .height]
@@ -91,20 +97,18 @@ final class NotchPanel: NSPanel {
         frameRect
     }
 
-    /// Snap (no window animation — the SwiftUI content animates the visible blob instead)
-    /// the panel to `contentSize`, kept top-anchored and horizontally centred.
-    func apply(contentSize: CGSize) {
+    func reposition() {
         guard let screen = ScreenMetrics.screen else { return }
         let sf = screen.frame
-        let newFrame = NSRect(x: (sf.minX + sf.maxX) / 2 - contentSize.width / 2,
-                              y: sf.maxY - contentSize.height,
-                              width: contentSize.width,
-                              height: contentSize.height)
-        setFrame(newFrame, display: true)
+        let size = ScreenMetrics.expandedSize
+        setFrame(NSRect(x: (sf.minX + sf.maxX) / 2 - size.width / 2,
+                        y: sf.maxY - size.height,
+                        width: size.width, height: size.height),
+                 display: true)
     }
 
     func show() {
-        apply(contentSize: ScreenMetrics.notchSize)
+        reposition()
         orderFrontRegardless()
     }
 }

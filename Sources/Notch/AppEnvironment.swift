@@ -34,10 +34,6 @@ final class NotchState: ObservableObject {
 
     @Published var isOpen = false
     @Published var tab: Tab = .music
-    @Published var size: CGSize
-
-    let collapsedSize = ScreenMetrics.notchSize
-    let expandedSize = CGSize(width: 300, height: 128)
 
     /// While set & in the future, the hover-watcher won't auto-collapse (used by `flash`).
     private(set) var pinnedUntil: Date?
@@ -45,20 +41,16 @@ final class NotchState: ObservableObject {
 
     private var closeWork: DispatchWorkItem?
 
-    init() { size = ScreenMetrics.notchSize }
-
     func open(tab newTab: Tab? = nil) {
         closeWork?.cancel(); closeWork = nil
         if let newTab { tab = newTab }
         isOpen = true
-        size = expandedSize
     }
 
     func close() {
         closeWork?.cancel(); closeWork = nil
         pinnedUntil = nil
         isOpen = false
-        size = collapsedSize
     }
 
     func cancelScheduledClose() { closeWork?.cancel(); closeWork = nil }

@@ -1,48 +1,51 @@
 import SwiftUI
 
 /// The black blob: a tiny pill when idle, an expanding panel with tabs when open.
-/// The view always fills the hosting window — the *window* is what changes size
-/// (driven by `NotchState.size` from `AppDelegate`); this view just paints the
-/// blob and swaps its contents.
+/// The hosting window is a fixed size (`ScreenMetrics.expandedSize`); this view paints
+/// a blob that grows/shrinks within it, so open/close is one smooth SwiftUI animation.
 struct NotchRootView: View {
     @EnvironmentObject private var notch: NotchState
 
-    private var anim: Animation { .spring(response: 0.30, dampingFraction: 0.86) }
-    private var collapsedRadius: CGFloat { min(10, ScreenMetrics.notchSize.height / 2) }
+    private static let openAnim: Animation = .easeOut(duration: 0.22)
 
-    /// Black left untouched at the top so it still reads as "below the notch".
-    private let topInset: CGFloat = 12
+    private var collapsedSize: CGSize { ScreenMetrics.notchSize }
+    private var expandedSize: CGSize { ScreenMetrics.expandedSize }
+    private var blobSize: CGSize { notch.isOpen ? expandedSize : collapsedSize }
+    private var bottomRadius: CGFloat { notch.isOpen ? 20 : min(10, collapsedSize.height / 2) }
+
+    private var blobShape: NotchShape { NotchShape(cornerInset: 8, bottomRadius: bottomRadius) }
 
     var body: some View {
         ZStack(alignment: .top) {
-            shape.fill(.black)
-            shape.stroke(Color.white.opacity(0.06), lineWidth: 1)
+            blobShape
+                .fill(.black)
+                .overlay(blobShape.stroke(Color.white.opacity(0.06), lineWidth: 1))
+                .frame(width: blobSize.width, height: blobSize.height)
+                .shadow(color: .black.opacity(0.28), radius: 11, y: 4)
+
             content
+                .frame(width: blobSize.width, height: blobSize.height)
+                .clipShape(blobShape)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(anim, value: notch.isOpen)
-        .animation(anim, value: notch.tab)
-        // Hover open/close is driven by AppDelegate's cursor watcher (not `.onHover`).
-    }
-
-    private var shape: NotchShape {
-        NotchShape(cornerInset: 8, bottomRadius: notch.isOpen ? 20 : collapsedRadius)
+        .animation(Self.openAnim, value: notch.isOpen)
+        .animation(Self.openAnim, value: notch.tab)
+        // Hover open/close is driven by AppDelegate's cursor watcher.
     }
 
     @ViewBuilder private var content: some View {
         if notch.isOpen {
             VStack(spacing: 7) {
                 tabBar
-                tabContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                tabContent.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .padding(.horizontal, 12)
-            .padding(.top, topInset)
+            .padding(.top, 12)
             .padding(.bottom, 11)
             .foregroundStyle(.white)
             .transition(.opacity)
         } else {
-            CollapsedPeek()
+            CollapsedPeek().transition(.opacity)
         }
     }
 

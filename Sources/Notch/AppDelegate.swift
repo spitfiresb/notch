@@ -23,10 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panel = panel
         panel.show()
 
-        // Drive the panel's size/position from NotchState.
-        env.notch.$size
+        // Let the menu bar under the collapsed pill stay clickable; capture clicks when open.
+        env.notch.$isOpen
             .removeDuplicates()
-            .sink { [weak panel] size in panel?.apply(contentSize: size) }
+            .sink { [weak panel] open in panel?.ignoresMouseEvents = !open }
             .store(in: &cancellables)
 
         installHoverWatcher()
@@ -37,24 +37,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Open / close the notch based on whether the cursor is over the panel's *current*
-    /// frame. Polled (not SwiftUI `.onHover`, not event monitors) so it stays rock-stable
-    /// while the panel resizes and regardless of which app is active.
+    /// Open / close the notch based on whether the cursor is over the *visible* blob
+    /// (the small pill when collapsed, the whole panel when open). Polled so it's stable
+    /// regardless of which app is active or whether the panel ignores mouse events.
     private func installHoverWatcher() {
-        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.evaluateHover()
-        }
-        RunLoop.main.add(hoverTimer!, forMode: .common)
+        let t = Timer(timeInterval: 0.06, repeats: true) { [weak self] _ in self?.evaluateHover() }
+        RunLoop.main.add(t, forMode: .common)
+        hoverTimer = t
     }
 
     private func evaluateHover() {
         guard let panel else { return }
         let notch = env.notch
-        if panel.frame.contains(NSEvent.mouseLocation) {
+        let wf = panel.frame
+        let blobRect: NSRect = notch.isOpen
+            ? wf
+            : NSRect(x: wf.midX - ScreenMetrics.notchSize.width / 2,
+                     y: wf.maxY - ScreenMetrics.notchSize.height,
+                     width: ScreenMetrics.notchSize.width,
+                     height: ScreenMetrics.notchSize.height)
+
+        if blobRect.contains(NSEvent.mouseLocation) {
             notch.cancelScheduledClose()
             if !notch.isOpen { notch.open() }
-        } else if notch.isOpen {
-            notch.scheduleClose(after: 0.25)
+        } else if notch.isOpen && !notch.isPinnedOpen {
+            notch.close()
         }
     }
 
