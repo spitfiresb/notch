@@ -10,11 +10,19 @@ final class AppEnvironment: ObservableObject {
 
     func start() {
         music.start()
-        screenshots.onNewScreenshot = { [weak self] _ in
-            self?.notch.flash(tab: .screenshots)
+        ScreenshotWatcher.disableSystemFloatingThumbnail()
+        screenshots.onNewScreenshot = { [weak self] url in
+            ScreenshotWatcher.copyToPasteboard(url)
+            self?.notch.presentScreenshotToast(url: url)
         }
         screenshots.start()
     }
+}
+
+/// Transient "screenshot copied" banner shown in the notch.
+struct ScreenshotToast: Equatable {
+    let url: URL
+    let message: String
 }
 
 /// Open / closed state of the notch panel plus which tab is showing.
@@ -34,8 +42,9 @@ final class NotchState: ObservableObject {
 
     @Published var isOpen = false
     @Published var tab: Tab = .music
+    @Published var toast: ScreenshotToast?
 
-    /// While set & in the future, the hover-watcher won't auto-collapse (used by `flash`).
+    /// While set & in the future, the hover-watcher won't auto-collapse.
     private(set) var pinnedUntil: Date?
     var isPinnedOpen: Bool { (pinnedUntil ?? .distantPast) > Date() }
 
@@ -43,6 +52,8 @@ final class NotchState: ObservableObject {
 
     func open(tab newTab: Tab? = nil) {
         closeWork?.cancel(); closeWork = nil
+        pinnedUntil = nil
+        toast = nil
         if let newTab { tab = newTab }
         isOpen = true
     }
@@ -50,8 +61,11 @@ final class NotchState: ObservableObject {
     func close() {
         closeWork?.cancel(); closeWork = nil
         pinnedUntil = nil
+        toast = nil
         isOpen = false
     }
+
+    func dismissToast() { toast = nil }
 
     func cancelScheduledClose() { closeWork?.cancel(); closeWork = nil }
 
@@ -70,10 +84,13 @@ final class NotchState: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    /// Pop open on a tab and keep it open for a few seconds (Dynamic-Island style).
-    func flash(tab: Tab) {
-        open(tab: tab)
-        pinnedUntil = Date().addingTimeInterval(5)
-        scheduleClose(after: 5.1)
+    /// Pop the notch open with a "screenshot copied" banner; auto-collapses after a beat.
+    func presentScreenshotToast(url: URL) {
+        closeWork?.cancel(); closeWork = nil
+        toast = ScreenshotToast(url: url, message: "Screenshot copied to clipboard")
+        tab = .screenshots          // what's revealed if the banner is dismissed early
+        isOpen = true
+        pinnedUntil = Date().addingTimeInterval(2.4)
+        scheduleClose(after: 2.5)
     }
 }

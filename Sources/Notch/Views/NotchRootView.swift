@@ -8,10 +8,14 @@ struct NotchRootView: View {
 
     private static let openAnim: Animation = .easeOut(duration: 0.22)
 
-    private var collapsedSize: CGSize { ScreenMetrics.notchSize }
-    private var expandedSize: CGSize { ScreenMetrics.expandedSize }
-    private var blobSize: CGSize { notch.isOpen ? expandedSize : collapsedSize }
-    private var bottomRadius: CGFloat { notch.isOpen ? 20 : min(10, collapsedSize.height / 2) }
+    private var blobSize: CGSize {
+        if notch.toast != nil { return ScreenMetrics.toastSize }
+        return notch.isOpen ? ScreenMetrics.expandedSize : ScreenMetrics.notchSize
+    }
+    private var bottomRadius: CGFloat {
+        if notch.toast != nil { return 16 }
+        return notch.isOpen ? 20 : min(10, ScreenMetrics.notchSize.height / 2)
+    }
 
     private var blobShape: NotchShape { NotchShape(cornerInset: 8, bottomRadius: bottomRadius) }
 
@@ -30,11 +34,17 @@ struct NotchRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(Self.openAnim, value: notch.isOpen)
         .animation(Self.openAnim, value: notch.tab)
+        .animation(Self.openAnim, value: notch.toast)
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }
 
     @ViewBuilder private var content: some View {
-        if notch.isOpen {
+        if let toast = notch.toast {
+            ScreenshotToastView(toast: toast)
+                .padding(.horizontal, 14)
+                .foregroundStyle(.white)
+                .transition(.opacity)
+        } else if notch.isOpen {
             VStack(spacing: 7) {
                 tabBar
                 tabContent.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -81,19 +91,21 @@ struct NotchRootView: View {
 private struct CollapsedPeek: View {
     @EnvironmentObject private var music: NowPlayingManager
 
+    private var showing: Bool { music.info.isPlaying }
+
     var body: some View {
         HStack(spacing: 8) {
             artwork
                 .frame(width: 18, height: 18)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
-                .opacity(music.info.hasContent ? 1 : 0)
             Spacer(minLength: 0)
             EqualizerBars()
                 .frame(width: 15, height: 11)
-                .opacity(music.info.hasContent && music.info.isPlaying ? 0.9 : 0)
+                .opacity(0.9)
         }
         .padding(.horizontal, 13)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .opacity(showing ? 1 : 0)
     }
 
     @ViewBuilder private var artwork: some View {

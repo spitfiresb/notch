@@ -59,7 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if blobRect.contains(NSEvent.mouseLocation) {
             notch.cancelScheduledClose()
-            if !notch.isOpen { notch.open() }
+            if !notch.isOpen {
+                notch.open()
+            } else if notch.toast != nil && !notch.isPinnedOpen {
+                notch.dismissToast()   // banner's time is up — reveal the tabs underneath
+            }
         } else if notch.isOpen && !notch.isPinnedOpen {
             notch.close()
         }

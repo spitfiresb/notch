@@ -70,27 +70,88 @@ struct MusicTabView: View {
 
 // MARK: - Screenshots
 
+/// Tracks whether the strip is actively being scrolled — a plain class so mutating it
+/// doesn't churn SwiftUI re-renders; thumbnails read it to mute their hover effects mid-scroll.
+final class ScrollActivity { var isScrolling = false }
+
 struct ScreenshotTabView: View {
     @EnvironmentObject private var screenshots: ScreenshotWatcher
+
+    private static let thumbWidth: CGFloat = 104
+    private static let spacing: CGFloat = 8
+    private static let step = thumbWidth + spacing
+    private static let space = "screenshotScroll"
+
+    @State private var activity = ScrollActivity()
+    @State private var lastSlot = Int.min
+    @State private var settleWork: DispatchWorkItem?
 
     var body: some View {
         if screenshots.shots.isEmpty {
             EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here")
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: Self.spacing) {
                     ForEach(screenshots.shots, id: \.self) { url in
-                        ScreenshotThumb(url: url)
+                        ScreenshotThumb(url: url, activity: activity)
                     }
                 }
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: ScrollOffsetKey.self,
+                                           value: g.frame(in: .named(Self.space)).minX)
+                })
             }
+            .coordinateSpace(name: Self.space)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onPreferenceChange(ScrollOffsetKey.self) { minX in
+                handleScroll(offset: minX)
+            }
+        }
+    }
+
+    private func handleScroll(offset minX: CGFloat) {
+        // Mark "scrolling" and auto-clear shortly after movement settles.
+        activity.isScrolling = true
+        settleWork?.cancel()
+        let work = DispatchWorkItem { activity.isScrolling = false }
+        settleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
+
+        // One haptic per thumbnail crossed — boundary at the half-step, so small jitter
+        // around a boundary won't flip the slot.
+        let slot = Int((-minX / Self.step).rounded())
+        if slot != lastSlot {
+            if lastSlot != Int.min { Haptics.tick() }
+            lastSlot = slot
+        }
+    }
+}
+
+private struct ScrollOffsetKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+enum Haptics {
+    private static var lastTick = Date.distantPast
+
+    /// macOS exposes no intensity knob, so a "strong" tap = two `.levelChange` pulses
+    /// stacked close together — that's about as hard as the trackpad will hit.
+    static func tick() {
+        let now = Date()
+        guard now.timeIntervalSince(lastTick) > 0.06 else { return }   // de-machine-gun
+        lastTick = now
+        let perf = NSHapticFeedbackManager.defaultPerformer
+        perf.perform(.levelChange, performanceTime: .now)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.024) {
+            perf.perform(.levelChange, performanceTime: .now)
         }
     }
 }
 
 private struct ScreenshotThumb: View {
     let url: URL
+    let activity: ScrollActivity
     @State private var image: NSImage?
     @State private var date: Date?
     @State private var hovering = false
@@ -106,7 +167,7 @@ private struct ScreenshotThumb: View {
         .frame(width: 104, height: 64)
         .overlay(alignment: .bottom) {
             if hovering {
-                Text(Self.relativeTime(date))
+                Text(relativeTime(date))
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6).padding(.vertical, 2)
@@ -116,30 +177,97 @@ private struct ScreenshotThumb: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(hovering ? 0.28 : 0.12)))
-        .scaleEffect(hovering ? 0.93 : 1)
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(hovering ? 0.26 : 0.12)))
+        .scaleEffect(hovering ? 0.95 : 1)
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .onHover { h in
-            withAnimation(.easeOut(duration: 0.14)) { hovering = h }
-            if h { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+            guard !activity.isScrolling else { return }   // don't fight the scroll
+            withAnimation(.easeOut(duration: 0.16)) { hovering = h }
+            if h { Haptics.tick() }
         }
         .onTapGesture { NSWorkspace.shared.open(url) }
         .onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
         .contextMenu {
             Button("Open") { NSWorkspace.shared.open(url) }
             Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            Button("Copy") {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                pb.writeObjects([url as NSURL])
-            }
+            Button("Copy") { ScreenshotWatcher.copyToPasteboard(url) }
         }
         .task(id: url) {
-            image = await Self.thumbnail(for: url)
+            image = await ScreenshotImage.thumbnail(for: url)
             date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         }
     }
 
+    private func relativeTime(_ date: Date?) -> String { ScreenshotImage.relativeTime(date) }
+}
+
+/// Minimal "screenshot copied to clipboard" banner: the label wipes in left→right,
+/// then a white ring sweeps 360° on its right and a checkmark strokes in. Nothing else.
+struct ScreenshotToastView: View {
+    let toast: ScreenshotToast
+    @State private var reveal: CGFloat = 0
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Text(toast.message)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .fixedSize()
+                .mask(alignment: .leading) {
+                    GeometryReader { g in Rectangle().frame(width: g.size.width * reveal) }
+                }
+            CircleCheckmark(delay: 0.54).frame(width: 18, height: 18)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { NSWorkspace.shared.open(toast.url) }
+        .onAppear {
+            // Wait for the notch to finish expanding (≈0.22s) before anything draws.
+            reveal = 0
+            withAnimation(.easeOut(duration: 0.30).delay(0.26)) { reveal = 1 }
+        }
+    }
+}
+
+/// A white stroked circle that draws itself around (a 360° sweep), then a checkmark
+/// strokes in inside it. Runs once on appear.
+struct CircleCheckmark: View {
+    var delay: Double = 0
+    @State private var ring: CGFloat = 0
+    @State private var check: CGFloat = 0
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .trim(from: 0, to: ring)
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            CheckmarkShape()
+                .trim(from: 0, to: check)
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                .padding(4)
+        }
+        .onAppear {
+            ring = 0; check = 0
+            withAnimation(.easeInOut(duration: 0.5).delay(delay)) { ring = 1 }
+            withAnimation(.easeOut(duration: 0.26).delay(delay + 0.44)) { check = 1 }
+        }
+    }
+}
+
+private struct CheckmarkShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX + r.width * 0.16, y: r.minY + r.height * 0.54))
+        p.addLine(to: CGPoint(x: r.minX + r.width * 0.40, y: r.minY + r.height * 0.78))
+        p.addLine(to: CGPoint(x: r.minX + r.width * 0.84, y: r.minY + r.height * 0.26))
+        return p
+    }
+}
+
+/// Helpers for screenshot thumbnails / timestamps.
+enum ScreenshotImage {
     private static let relFormatter: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .full
@@ -148,12 +276,11 @@ private struct ScreenshotThumb: View {
 
     static func relativeTime(_ date: Date?) -> String {
         guard let date else { return "" }
-        let secondsAgo = -date.timeIntervalSinceNow
-        if secondsAgo < 45 { return "just now" }
+        if -date.timeIntervalSinceNow < 45 { return "just now" }
         return relFormatter.localizedString(for: date, relativeTo: Date())
     }
 
-    static func thumbnail(for url: URL, maxPixel: CGFloat = 360) async -> NSImage? {
+    static func thumbnail(for url: URL, maxPixel: CGFloat = 400) async -> NSImage? {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { cont.resume(returning: nil); return }

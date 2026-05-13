@@ -29,6 +29,9 @@ enum ScreenMetrics {
     /// transparent around the blob when collapsed) so the open/close grow can be a
     /// pure, smooth SwiftUI animation with no window-resize jank.
     static let expandedSize = CGSize(width: 300, height: 128)
+
+    /// Compact size used for the transient "screenshot copied" banner.
+    static let toastSize = CGSize(width: 252, height: 46)
 }
 
 /// The classic macOS notch silhouette: flat against the screen top with little

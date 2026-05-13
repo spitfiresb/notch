@@ -32,6 +32,29 @@ final class ScreenshotWatcher: ObservableObject {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
     }
 
+    /// Turn off macOS's floating screenshot thumbnail (bottom-right preview), so captures
+    /// land straight on disk and Notch can take over the "what just happened" feedback.
+    /// `screencapture` re-reads this each time, so it takes effect immediately.
+    nonisolated static func disableSystemFloatingThumbnail() {
+        CFPreferencesSetValue("show-thumbnail" as CFString, kCFBooleanFalse,
+                              "com.apple.screencapture" as CFString,
+                              kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        CFPreferencesSynchronize("com.apple.screencapture" as CFString,
+                                 kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+    }
+
+    /// Copy a just-captured screenshot file onto the general pasteboard so it can be pasted.
+    nonisolated static func copyToPasteboard(_ url: URL) {
+        guard let data = try? Data(contentsOf: url), let image = NSImage(data: data) else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        var types: [NSPasteboard.PasteboardType] = [.tiff]
+        if url.pathExtension.lowercased() == "png" { types.insert(.png, at: 0) }
+        pb.declareTypes(types, owner: nil)
+        if url.pathExtension.lowercased() == "png" { pb.setData(data, forType: .png) }
+        pb.setData(image.tiffRepresentation, forType: .tiff)
+    }
+
     func start() {
         scan(initial: true)
         startFolderWatch()
