@@ -19,7 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(env.notch)
             .environmentObject(env.music)
             .environmentObject(env.screenshots)
-            .environmentObject(env.clipboard)
         let panel = NotchPanel(rootView: root)
         self.panel = panel
         panel.show()

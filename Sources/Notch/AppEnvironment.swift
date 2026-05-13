@@ -7,11 +7,9 @@ final class AppEnvironment: ObservableObject {
     let notch = NotchState()
     let music = NowPlayingManager()
     let screenshots = ScreenshotWatcher()
-    let clipboard = ClipboardWatcher()
 
     func start() {
         music.start()
-        clipboard.start()
         screenshots.onNewScreenshot = { [weak self] _ in
             self?.notch.flash(tab: .screenshots)
         }
@@ -23,13 +21,12 @@ final class AppEnvironment: ObservableObject {
 @MainActor
 final class NotchState: ObservableObject {
     enum Tab: String, CaseIterable, Identifiable {
-        case music, screenshots, clipboard, settings
+        case music, screenshots, settings
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .music: "music.note"
             case .screenshots: "camera.viewfinder"
-            case .clipboard: "doc.on.clipboard"
             case .settings: "gearshape"
             }
         }
@@ -40,7 +37,7 @@ final class NotchState: ObservableObject {
     @Published var size: CGSize
 
     let collapsedSize = ScreenMetrics.notchSize
-    let expandedSize = CGSize(width: 580, height: 300)
+    let expandedSize = CGSize(width: 300, height: 128)
 
     /// While set & in the future, the hover-watcher won't auto-collapse (used by `flash`).
     private(set) var pinnedUntil: Date?

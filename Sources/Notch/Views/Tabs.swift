@@ -8,37 +8,48 @@ struct MusicTabView: View {
     private var info: NowPlayingInfo { music.info }
 
     var body: some View {
-        HStack(spacing: 14) {
-            artwork
-                .frame(width: 86, height: 86)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.1)))
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                artwork
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.white.opacity(0.12)))
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(info.hasContent ? info.title : "Nothing playing")
-                    .font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                Text(info.artist).font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
-                if !info.album.isEmpty {
-                    Text(info.album).font(.system(size: 11)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
-                }
-                Spacer(minLength: 6)
-                HStack(spacing: 24) {
-                    control("backward.fill", size: 15) { music.previous() }
-                    control(info.isPlaying ? "pause.fill" : "play.fill", size: 20) { music.togglePlayPause() }
-                    control("forward.fill", size: 15) { music.next() }
-                    Spacer()
-                    if !info.source.isEmpty {
-                        Text(info.source).font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(info.hasContent ? info.title : "Nothing playing")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .lineLimit(2)
+                    if info.hasContent {
+                        Text(info.artist)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(1)
                     }
                 }
+                Spacer(minLength: 0)
             }
+
             Spacer(minLength: 0)
+
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                control("backward.fill", size: 13) { music.previous() }
+                Spacer().frame(width: 26)
+                control(info.isPlaying ? "pause.fill" : "play.fill", size: 17) { music.togglePlayPause() }
+                Spacer().frame(width: 26)
+                control("forward.fill", size: 13) { music.next() }
+                Spacer(minLength: 0)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func control(_ symbol: String, size: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: size, weight: .medium)).contentShape(Rectangle())
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .medium))
+                .frame(width: size + 12, height: size + 8)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!info.hasContent)
@@ -51,7 +62,7 @@ struct MusicTabView: View {
         } else {
             ZStack {
                 Color.white.opacity(0.08)
-                Image(systemName: "music.note").font(.title2).foregroundStyle(.white.opacity(0.4))
+                Image(systemName: "music.note").font(.system(size: 15)).foregroundStyle(.white.opacity(0.4))
             }
         }
     }
@@ -64,16 +75,16 @@ struct ScreenshotTabView: View {
 
     var body: some View {
         if screenshots.shots.isEmpty {
-            EmptyTab(symbol: "camera.viewfinder", text: "Screenshots will show up here")
+            EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here")
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     ForEach(screenshots.shots, id: \.self) { url in
                         ScreenshotThumb(url: url)
                     }
                 }
-                .padding(.vertical, 2)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -90,10 +101,10 @@ private struct ScreenshotThumb: View {
                 Color.white.opacity(0.07)
             }
         }
-        .frame(width: 158, height: 100)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.12)))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .frame(width: 104, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.12)))
+        .contentShape(RoundedRectangle(cornerRadius: 6))
         .onTapGesture { NSWorkspace.shared.open(url) }
         .onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
         .contextMenu {
@@ -126,81 +137,43 @@ private struct ScreenshotThumb: View {
     }
 }
 
-// MARK: - Clipboard
-
-struct ClipboardTabView: View {
-    @EnvironmentObject private var clipboard: ClipboardWatcher
-
-    var body: some View {
-        if clipboard.items.isEmpty {
-            EmptyTab(symbol: "doc.on.clipboard", text: "Copied text & images land here")
-        } else {
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 6) {
-                    ForEach(clipboard.items) { item in
-                        Button { clipboard.copy(item) } label: { row(for: item) }
-                            .buttonStyle(.plain)
-                    }
-                }
-                .padding(.trailing, 2)
-            }
-        }
-    }
-
-    private func row(for item: ClipItem) -> some View {
-        HStack(spacing: 10) {
-            switch item.kind {
-            case .text(let s):
-                Image(systemName: "text.alignleft").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
-                Text(s.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .font(.system(size: 12)).lineLimit(2).multilineTextAlignment(.leading)
-            case .image(let img):
-                Image(systemName: "photo").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
-                Image(nsImage: img).resizable().aspectRatio(contentMode: .fit).frame(height: 34)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
 // MARK: - Settings
 
 struct SettingsTabView: View {
     @State private var refresh = false   // toggled to re-read live permission state
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
             statusRow("Accessibility", ok: Permissions.accessibilityTrusted) { Permissions.openAccessibilitySettings() }
             statusRow("Control Spotify", ok: Permissions.spotifyControllable) { Permissions.openAutomationSettings() }
             statusRow("Screenshot folder", ok: Permissions.probeScreenshotFolderAccess()) { Permissions.openFilesAndFoldersSettings() }
-            Spacer(minLength: 4)
-            HStack(spacing: 10) {
-                Button("Re-run setup…") { AppDelegate.shared?.showOnboarding() }
+            Spacer(minLength: 2)
+            HStack(spacing: 12) {
+                Button("Setup…") { AppDelegate.shared?.showOnboarding() }
                 Button("Refresh") { refresh.toggle() }
-                Spacer()
-                Button("Quit Notch") { NSApp.terminate(nil) }
-                    .foregroundStyle(.red.opacity(0.9))
+                Spacer(minLength: 0)
+                Button("Quit") { NSApp.terminate(nil) }.foregroundStyle(.red.opacity(0.9))
             }
             .buttonStyle(.plain)
-            .font(.system(size: 12))
+            .font(.system(size: 11, weight: .medium))
         }
+        .font(.system(size: 11))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .id(refresh)
     }
 
     private func statusRow(_ title: String, ok: Bool, openSettings: @escaping () -> Void) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle")
+        HStack(spacing: 7) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .font(.system(size: 11))
                 .foregroundStyle(ok ? .green : .yellow)
-            Text(title).font(.system(size: 13))
-            Spacer()
+            Text(title)
+            Spacer(minLength: 0)
             if !ok {
-                Button("Fix", action: openSettings).buttonStyle(.plain)
-                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                Button("Fix", action: openSettings)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
             }
         }
     }
@@ -212,9 +185,9 @@ private struct EmptyTab: View {
     let symbol: String
     let text: String
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: symbol).font(.system(size: 26)).foregroundStyle(.white.opacity(0.35))
-            Text(text).font(.system(size: 12)).foregroundStyle(.white.opacity(0.45))
+        VStack(spacing: 6) {
+            Image(systemName: symbol).font(.system(size: 20)).foregroundStyle(.white.opacity(0.3))
+            Text(text).font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

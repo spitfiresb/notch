@@ -7,8 +7,11 @@ import SwiftUI
 struct NotchRootView: View {
     @EnvironmentObject private var notch: NotchState
 
-    private var anim: Animation { .spring(response: 0.32, dampingFraction: 0.85) }
+    private var anim: Animation { .spring(response: 0.30, dampingFraction: 0.86) }
     private var collapsedRadius: CGFloat { min(10, ScreenMetrics.notchSize.height / 2) }
+
+    /// Black left untouched at the top so it still reads as "below the notch".
+    private let topInset: CGFloat = 12
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -19,24 +22,23 @@ struct NotchRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(anim, value: notch.isOpen)
         .animation(anim, value: notch.tab)
-        // Hover open/close is driven by AppDelegate's cursor watcher (not `.onHover`),
-        // so it stays stable while the window resizes.
+        // Hover open/close is driven by AppDelegate's cursor watcher (not `.onHover`).
     }
 
     private var shape: NotchShape {
-        NotchShape(cornerInset: 8, bottomRadius: notch.isOpen ? 22 : collapsedRadius)
+        NotchShape(cornerInset: 8, bottomRadius: notch.isOpen ? 20 : collapsedRadius)
     }
 
     @ViewBuilder private var content: some View {
         if notch.isOpen {
-            VStack(spacing: 8) {
+            VStack(spacing: 7) {
                 tabBar
-                Divider().overlay(.white.opacity(0.12))
                 tabContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(14)
-            .padding(.top, max(0, ScreenMetrics.notchSize.height - 14))
+            .padding(.horizontal, 12)
+            .padding(.top, topInset)
+            .padding(.bottom, 11)
             .foregroundStyle(.white)
             .transition(.opacity)
         } else {
@@ -45,27 +47,28 @@ struct NotchRootView: View {
     }
 
     private var tabBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             ForEach(NotchState.Tab.allCases) { tab in
                 Button { notch.open(tab: tab) } label: {
                     Image(systemName: tab.symbol)
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 34, height: 26)
-                        .background(notch.tab == tab ? Color.white.opacity(0.16) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 7))
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 30, height: 19)
+                        .background(notch.tab == tab ? Color.white.opacity(0.18) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 6))
                         .contentShape(Rectangle())
+                        .foregroundStyle(notch.tab == tab ? .white : .white.opacity(0.55))
                 }
                 .buttonStyle(.plain)
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
+        .frame(height: 19)
     }
 
     @ViewBuilder private var tabContent: some View {
         switch notch.tab {
         case .music:       MusicTabView()
         case .screenshots: ScreenshotTabView()
-        case .clipboard:   ClipboardTabView()
         case .settings:    SettingsTabView()
         }
     }
