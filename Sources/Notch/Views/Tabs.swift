@@ -207,7 +207,7 @@ struct ScreenshotToastView: View {
     let toast: ScreenshotToast
 
     /// Notch-expand settle time before anything in the banner starts moving.
-    private static let lead = 0.22
+    private static let lead = 0.34       // wait for the notch to finish expanding
     private static let perChar = 0.018
 
     var body: some View {

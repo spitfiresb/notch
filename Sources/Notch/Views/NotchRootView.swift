@@ -6,7 +6,11 @@ import SwiftUI
 struct NotchRootView: View {
     @EnvironmentObject private var notch: NotchState
 
-    private static let openAnim: Animation = .easeOut(duration: 0.22)
+    // Open is a touch slower than close so the content has time to register on the
+    // eye; close feels right at 0.22s.
+    private static let openAnim: Animation = .easeOut(duration: 0.32)
+    private static let closeAnim: Animation = .easeOut(duration: 0.22)
+    private var transitionAnim: Animation { notch.isOpen ? Self.openAnim : Self.closeAnim }
 
     private var blobSize: CGSize {
         if notch.toast != nil { return ScreenMetrics.toastSize }
@@ -32,18 +36,26 @@ struct NotchRootView: View {
                 .clipShape(blobShape)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(Self.openAnim, value: notch.isOpen)
+        .animation(transitionAnim, value: notch.isOpen)
         .animation(Self.openAnim, value: notch.tab)
-        .animation(Self.openAnim, value: notch.toast)
+        .animation(transitionAnim, value: notch.toast)
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }
+
+    /// Asymmetric: fade + slide in when *appearing*; on *disappearance*, a zero-duration
+    /// opacity transition so the old layout vanishes immediately (no lingering ghost
+    /// while the blob shrinks back). `.identity` was wrong here — it actually keeps the
+    /// view visible for the full transition duration before snapping away.
+    private static let contentTransition: AnyTransition = .asymmetric(
+        insertion: .opacity.combined(with: .offset(y: 6)),
+        removal: .opacity.animation(.linear(duration: 0)))
 
     @ViewBuilder private var content: some View {
         if let toast = notch.toast {
             ScreenshotToastView(toast: toast)
                 .padding(.horizontal, 14)
                 .foregroundStyle(.white)
-                .transition(.opacity)
+                .transition(Self.contentTransition)
         } else if notch.isOpen {
             VStack(spacing: 7) {
                 tabBar
@@ -53,9 +65,9 @@ struct NotchRootView: View {
             .padding(.top, 12)
             .padding(.bottom, 11)
             .foregroundStyle(.white)
-            .transition(.opacity)
+            .transition(Self.contentTransition)
         } else {
-            CollapsedPeek().transition(.opacity)
+            CollapsedPeek().transition(.identity)
         }
     }
 
