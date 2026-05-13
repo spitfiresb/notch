@@ -92,6 +92,8 @@ struct ScreenshotTabView: View {
 private struct ScreenshotThumb: View {
     let url: URL
     @State private var image: NSImage?
+    @State private var date: Date?
+    @State private var hovering = false
 
     var body: some View {
         Group {
@@ -102,9 +104,25 @@ private struct ScreenshotThumb: View {
             }
         }
         .frame(width: 104, height: 64)
+        .overlay(alignment: .bottom) {
+            if hovering {
+                Text(Self.relativeTime(date))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(.black.opacity(0.6), in: Capsule())
+                    .padding(.bottom, 5)
+                    .transition(.opacity)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(hovering ? 0.28 : 0.12)))
+        .scaleEffect(hovering ? 0.93 : 1)
         .contentShape(RoundedRectangle(cornerRadius: 6))
+        .onHover { h in
+            withAnimation(.easeOut(duration: 0.14)) { hovering = h }
+            if h { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+        }
         .onTapGesture { NSWorkspace.shared.open(url) }
         .onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
         .contextMenu {
@@ -116,7 +134,23 @@ private struct ScreenshotThumb: View {
                 pb.writeObjects([url as NSURL])
             }
         }
-        .task(id: url) { image = await Self.thumbnail(for: url) }
+        .task(id: url) {
+            image = await Self.thumbnail(for: url)
+            date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        }
+    }
+
+    private static let relFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return f
+    }()
+
+    static func relativeTime(_ date: Date?) -> String {
+        guard let date else { return "" }
+        let secondsAgo = -date.timeIntervalSinceNow
+        if secondsAgo < 45 { return "just now" }
+        return relFormatter.localizedString(for: date, relativeTo: Date())
     }
 
     static func thumbnail(for url: URL, maxPixel: CGFloat = 360) async -> NSImage? {

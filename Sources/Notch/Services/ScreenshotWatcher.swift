@@ -1,9 +1,10 @@
 import AppKit
 import Combine
+import CoreServices
 
-/// Watches for new screenshots and keeps a list of recent ones.
-/// Uses a Spotlight (`NSMetadataQuery`) query for files flagged `kMDItemIsScreenCapture`,
-/// scoped to the folder macOS is configured to save screenshots into.
+/// Watches the folder macOS saves screenshots into and keeps the most-recent few.
+/// Uses a direct filesystem watch on the folder (plus a slow safety-net poll) — no
+/// dependency on Spotlight indexing — and identifies screenshots by macOS's naming.
 @MainActor
 final class ScreenshotWatcher: ObservableObject {
     @Published private(set) var shots: [URL] = []
@@ -11,57 +12,101 @@ final class ScreenshotWatcher: ObservableObject {
     /// Called when a screenshot appears *after* the app launched.
     var onNewScreenshot: ((URL) -> Void)?
 
-    private let query = NSMetadataQuery()
-    private let launchDate = Date()
-    private var seen = Set<URL>()
+    private let maxCount = 7
+    private let dir: URL
+    private var source: DispatchSourceFileSystemObject?
+    private var dirFD: Int32 = -1
+    private var pollTimer: Timer?
+    private var rescanWork: DispatchWorkItem?
+    private var newestSeen: Date = .distantPast
+    private var didInitialScan = false
 
-    func start() {
-        query.predicate = NSPredicate(format: "kMDItemIsScreenCapture == 1")
-        query.searchScopes = [Self.screenshotDirectory.path]
-        query.sortDescriptors = [NSSortDescriptor(key: NSMetadataItemFSContentChangeDateKey, ascending: false)]
-
-        let center = NotificationCenter.default
-        center.addObserver(self, selector: #selector(handleResults),
-                           name: .NSMetadataQueryDidFinishGathering, object: query)
-        center.addObserver(self, selector: #selector(handleResults),
-                           name: .NSMetadataQueryDidUpdate, object: query)
-        query.start()
-    }
+    init() { dir = ScreenshotWatcher.screenshotDirectory }
 
     nonisolated static var screenshotDirectory: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
         if let raw = CFPreferencesCopyAppValue("location" as CFString,
                                                "com.apple.screencapture" as CFString) as? String,
            !raw.isEmpty {
             return URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
         }
-        return home.appendingPathComponent("Desktop")
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
     }
 
-    @objc private func handleResults(_ note: Notification) {
-        query.disableUpdates()
-        defer { query.enableUpdates() }
-
-        var urls: [URL] = []
-        for i in 0..<query.resultCount {
-            guard let item = query.result(at: i) as? NSMetadataItem,
-                  let path = item.value(forAttribute: NSMetadataItemPathKey) as? String else { continue }
-            let url = URL(fileURLWithPath: path)
-            if FileManager.default.fileExists(atPath: url.path) { urls.append(url) }
+    func start() {
+        scan(initial: true)
+        startFolderWatch()
+        // Safety net: re-scan every few seconds in case a filesystem event is missed
+        // (and to pick up access once the user grants the folder permission).
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.scan(initial: false) }
         }
+    }
 
-        let isUpdate = note.name == .NSMetadataQueryDidUpdate
-        let fresh = urls.filter { url in
-            guard !seen.contains(url) else { return false }
-            guard let mod = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-            else { return false }
-            return mod > launchDate
-        }
-        seen.formUnion(urls)
-        shots = Array(urls.prefix(40))
+    // MARK: Filesystem watch
 
-        if isUpdate, let newest = fresh.first {
-            onNewScreenshot?(newest)
+    private func startFolderWatch() {
+        dirFD = open(dir.path, O_EVTONLY)
+        guard dirFD >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: dirFD, eventMask: [.write, .rename, .delete, .extend], queue: .main)
+        src.setEventHandler { [weak self] in self?.scheduleRescan() }
+        src.setCancelHandler { [weak self] in
+            if let fd = self?.dirFD, fd >= 0 { close(fd) }
         }
+        src.resume()
+        source = src
+    }
+
+    /// Debounce: macOS may still be writing the file when the event fires.
+    private func scheduleRescan() {
+        rescanWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.scan(initial: false) }
+        rescanWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    // MARK: Scanning
+
+    private func scan(initial requestedInitial: Bool) {
+        let fm = FileManager.default
+        // If this fails the folder isn't readable yet (permission) — try again on the poll.
+        guard let entries = try? fm.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]) else { return }
+
+        let dated: [(url: URL, date: Date)] = entries.compactMap { url in
+            guard Self.isScreenshot(url),
+                  let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            else { return nil }
+            return (url, date)
+        }.sorted { $0.date > $1.date }
+
+        let top = Array(dated.prefix(maxCount).map(\.url))
+        if top != shots { shots = top }
+
+        let treatAsInitial = requestedInitial || !didInitialScan
+        if let newest = dated.first {
+            if treatAsInitial {
+                newestSeen = newest.date
+            } else if newest.date > newestSeen {
+                newestSeen = newest.date
+                onNewScreenshot?(newest.url)
+            }
+        }
+        didInitialScan = true
+    }
+
+    private static func isScreenshot(_ url: URL) -> Bool {
+        guard ["png", "jpg", "jpeg", "heic", "tiff", "pdf"].contains(url.pathExtension.lowercased()) else { return false }
+        let name = url.lastPathComponent
+        // macOS default screenshot names ("Screenshot …" / older "Screen Shot …").
+        if name.hasPrefix("Screenshot") || name.hasPrefix("Screen Shot") { return true }
+        // Fall back to the Spotlight "is a screen capture" flag for localized names.
+        if let item = MDItemCreate(nil, url.path as CFString),
+           let flag = MDItemCopyAttribute(item, "kMDItemIsScreenCapture" as CFString) as? Bool, flag {
+            return true
+        }
+        return false
     }
 }
