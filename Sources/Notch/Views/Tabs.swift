@@ -205,28 +205,46 @@ private struct ScreenshotThumb: View {
 /// then a white ring sweeps 360° on its right and a checkmark strokes in. Nothing else.
 struct ScreenshotToastView: View {
     let toast: ScreenshotToast
-    @State private var reveal: CGFloat = 0
+
+    /// Notch-expand settle time before anything in the banner starts moving.
+    private static let lead = 0.22
+    private static let perChar = 0.018
 
     var body: some View {
         HStack(spacing: 9) {
-            Text(toast.message)
+            CascadeText(text: toast.message, startDelay: Self.lead, perChar: Self.perChar)
                 .font(.system(size: 12, weight: .semibold))
+                .kerning(-0.1)
                 .foregroundStyle(.white)
-                .fixedSize()
-                .mask(alignment: .leading) {
-                    GeometryReader { g in Rectangle().frame(width: g.size.width * reveal) }
-                }
-            CircleCheckmark(delay: 0.54).frame(width: 18, height: 18)
+            CircleCheckmark(delay: Self.lead + Double(toast.message.count) * Self.perChar + 0.04)
+                .frame(width: 18, height: 18)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { NSWorkspace.shared.open(toast.url) }
-        .onAppear {
-            // Wait for the notch to finish expanding (≈0.22s) before anything draws.
-            reveal = 0
-            withAnimation(.easeOut(duration: 0.30).delay(0.26)) { reveal = 1 }
+    }
+}
+
+/// Text whose characters spring in one after another, left → right.
+private struct CascadeText: View {
+    let text: String
+    var startDelay: Double = 0
+    var perChar: Double = 0.02
+    @State private var shown = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(text.enumerated()), id: \.offset) { idx, ch in
+                Text(ch == " " ? "\u{00A0}" : String(ch))
+                    .opacity(shown ? 1 : 0)
+                    .scaleEffect(shown ? 1 : 0.5, anchor: .bottom)
+                    .offset(y: shown ? 0 : 5)
+                    .animation(.spring(response: 0.36, dampingFraction: 0.6)
+                        .delay(startDelay + Double(idx) * perChar), value: shown)
+            }
         }
+        .onAppear { shown = true }
     }
 }
 
@@ -250,8 +268,8 @@ struct CircleCheckmark: View {
         }
         .onAppear {
             ring = 0; check = 0
-            withAnimation(.easeInOut(duration: 0.5).delay(delay)) { ring = 1 }
-            withAnimation(.easeOut(duration: 0.26).delay(delay + 0.44)) { check = 1 }
+            withAnimation(.easeInOut(duration: 0.4).delay(delay)) { ring = 1 }
+            withAnimation(.easeOut(duration: 0.22).delay(delay + 0.34)) { check = 1 }
         }
     }
 }

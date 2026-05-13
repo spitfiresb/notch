@@ -90,7 +90,7 @@ final class NotchState: ObservableObject {
         toast = ScreenshotToast(url: url, message: "Screenshot copied to clipboard")
         tab = .screenshots          // what's revealed if the banner is dismissed early
         isOpen = true
-        pinnedUntil = Date().addingTimeInterval(2.4)
-        scheduleClose(after: 2.5)
+        pinnedUntil = Date().addingTimeInterval(2.25)
+        scheduleClose(after: 2.35)
     }
 }
