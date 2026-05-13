@@ -1,5 +1,7 @@
 import AppKit
 import Combine
+import CoreImage
+import SwiftUI
 
 struct NowPlayingInfo: Equatable {
     var title = ""
@@ -8,7 +10,11 @@ struct NowPlayingInfo: Equatable {
     var isPlaying = false
     var artwork: NSImage?
     var artworkKey: String?     // url or track id, so we can avoid re-fetching artwork
+    var accentColor: Color?     // vibrant tint derived from the artwork
     var source = ""             // "Spotify", "Now Playing", …
+    var duration: Double?       // total seconds
+    var elapsed: Double?        // seconds at `elapsedAt`
+    var elapsedAt: Date?        // wall-clock time when `elapsed` was sampled
     var hasContent: Bool { !title.isEmpty }
 }
 
@@ -25,6 +31,7 @@ final class NowPlayingManager: ObservableObject {
     private var pollTimer: Timer?
     private var usingSpotifyFallback = false
     private var artworkCache: [String: NSImage] = [:]
+    private var accentCache: [String: Color] = [:]
 
     func start() {
         mr.registerForNotifications { [weak self] in self?.refresh() }
@@ -37,6 +44,19 @@ final class NowPlayingManager: ObservableObject {
     func togglePlayPause() { command(.togglePlayPause, spotify: "playpause") }
     func next()            { command(.nextTrack, spotify: "next track") }
     func previous()        { command(.previousTrack, spotify: "previous track") }
+
+    /// Seek the current track to `seconds`. Tries MediaRemote first; falls back to
+    /// Spotify Apple Events if the system path isn't available.
+    func seek(to seconds: Double) {
+        let s = max(0, seconds)
+        if usingSpotifyFallback || !mr.setElapsed(s) {
+            SpotifyBridge.seek(to: s)
+        }
+        // Optimistic local update so the scrubber doesn't snap back before the next poll.
+        info.elapsed = s
+        info.elapsedAt = Date()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.refresh() }
+    }
 
     private func command(_ c: MediaRemoteBridge.Command, spotify verb: String) {
         if usingSpotifyFallback || !mr.sendCommand(c) {
@@ -71,20 +91,64 @@ final class NowPlayingManager: ObservableObject {
             info.artwork = cached
         }
         if let art = info.artwork, let key = info.artworkKey { artworkCache[key] = art }
+        if let key = info.artworkKey, let cached = accentCache[key] {
+            info.accentColor = cached
+        } else if let art = info.artwork {
+            let accent = ColorAccent.extract(from: art)
+            info.accentColor = accent
+            if let key = info.artworkKey { accentCache[key] = accent }
+        }
     }
 
     private func loadArtwork(from url: URL, key: String?) {
         if let key, artworkCache[key] != nil { return }
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data, let image = NSImage(data: data) else { return }
+            let accent = ColorAccent.extract(from: image)
             DispatchQueue.main.async {
                 guard let self else { return }
-                if let key { self.artworkCache[key] = image }
+                if let key {
+                    self.artworkCache[key] = image
+                    self.accentCache[key] = accent
+                }
                 if self.info.artworkKey == key || self.info.artwork == nil {
                     self.info.artwork = image
+                    self.info.accentColor = accent
                 }
             }
         }.resume()
+    }
+}
+
+// MARK: - Album-art accent color
+
+/// Extracts a vibrant accent color from an album cover by averaging it and then
+/// boosting saturation / brightness so it pops on the dark notch.
+enum ColorAccent {
+    static func extract(from image: NSImage) -> Color {
+        guard let tiff = image.tiffRepresentation,
+              let ciImage = CIImage(data: tiff) else { return .white }
+        let extent = ciImage.extent
+        let params: [String: Any] = [
+            kCIInputImageKey: ciImage,
+            kCIInputExtentKey: CIVector(cgRect: extent),
+        ]
+        guard let output = CIFilter(name: "CIAreaAverage", parameters: params)?.outputImage
+        else { return .white }
+        var rgba = [UInt8](repeating: 0, count: 4)
+        let ctx = CIContext(options: [.workingColorSpace: NSNull()])
+        ctx.render(output, toBitmap: &rgba, rowBytes: 4,
+                   bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                   format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        let avg = NSColor(red: CGFloat(rgba[0]) / 255,
+                          green: CGFloat(rgba[1]) / 255,
+                          blue: CGFloat(rgba[2]) / 255,
+                          alpha: 1).usingColorSpace(.deviceRGB)
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
+        avg?.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        let punchedS = min(1, max(0.55, s * 1.4))
+        let punchedB = min(0.95, max(0.75, b * 1.25))
+        return Color(nsColor: NSColor(hue: h, saturation: punchedS, brightness: punchedB, alpha: 1))
     }
 }
 
@@ -97,11 +161,13 @@ final class MediaRemoteBridge {
     private typealias GetPlayingFn  = @convention(c) (DispatchQueue, @escaping (Bool) -> Void) -> Void
     private typealias SendCommandFn = @convention(c) (Int, CFDictionary?) -> Bool
     private typealias RegisterFn    = @convention(c) (DispatchQueue) -> Void
+    private typealias SetElapsedFn  = @convention(c) (Double) -> Void
 
     private let getInfoFn: GetInfoFn?
     private let getPlayingFn: GetPlayingFn?
     private let sendCommandFn: SendCommandFn?
     private let registerFn: RegisterFn?
+    private let setElapsedFn: SetElapsedFn?
 
     init() {
         let handle = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY)
@@ -113,6 +179,7 @@ final class MediaRemoteBridge {
         getPlayingFn  = sym("MRMediaRemoteGetNowPlayingApplicationIsPlaying", as: GetPlayingFn.self)
         sendCommandFn = sym("MRMediaRemoteSendCommand", as: SendCommandFn.self)
         registerFn    = sym("MRMediaRemoteRegisterForNowPlayingNotifications", as: RegisterFn.self)
+        setElapsedFn  = sym("MRMediaRemoteSetElapsedTime", as: SetElapsedFn.self)
     }
 
     func registerForNotifications(_ onChange: @escaping () -> Void) {
@@ -128,6 +195,13 @@ final class MediaRemoteBridge {
 
     func sendCommand(_ command: Command) -> Bool {
         sendCommandFn?(command.rawValue, nil) ?? false
+    }
+
+    @discardableResult
+    func setElapsed(_ seconds: Double) -> Bool {
+        guard let f = setElapsedFn else { return false }
+        f(seconds)
+        return true
     }
 
     /// Calls `completion` on the main queue.
@@ -147,6 +221,11 @@ final class MediaRemoteBridge {
                 ?? "\(info.artist)\u{1}\(info.title)"
             let rate = (raw["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double) ?? 0
             info.isPlaying = rate > 0
+            info.duration = raw["kMRMediaRemoteNowPlayingInfoDuration"] as? Double
+            if let elapsed = raw["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double {
+                info.elapsed = elapsed
+                info.elapsedAt = Date()
+            }
             guard info.hasContent else { completion(nil); return }
             if let getPlayingFn = self.getPlayingFn {
                 getPlayingFn(DispatchQueue.main) { playing in
@@ -188,6 +267,11 @@ enum SpotifyBridge {
         _ = run(verb)
     }
 
+    static func seek(to seconds: Double) {
+        guard isRunning else { return }
+        _ = run("set player position to \(seconds)")
+    }
+
     /// Returns the current track plus an optional artwork URL to fetch asynchronously.
     static func fetch() -> (NowPlayingInfo, URL?)? {
         guard isRunning else { return nil }
@@ -199,7 +283,9 @@ enum SpotifyBridge {
         set tid to id of current track
         set art to artwork url of current track
         set ps to (player state as text)
-        return t & linefeed & a & linefeed & al & linefeed & tid & linefeed & art & linefeed & ps
+        set dur to duration of current track  -- ms
+        set pos to player position             -- seconds (Double)
+        return t & linefeed & a & linefeed & al & linefeed & tid & linefeed & art & linefeed & ps & linefeed & dur & linefeed & pos
         """
         guard let out = run(body), !out.isEmpty else { return nil }
         let parts = out.components(separatedBy: "\n")
@@ -211,6 +297,13 @@ enum SpotifyBridge {
         info.artworkKey = parts[3].isEmpty ? "\(parts[1])\u{1}\(parts[0])" : parts[3]
         info.isPlaying = parts[5] == "playing"
         info.source = "Spotify"
+        if parts.count >= 8 {
+            if let durMs = Double(parts[6]), durMs > 0 { info.duration = durMs / 1000 }
+            if let pos = Double(parts[7]) {
+                info.elapsed = pos
+                info.elapsedAt = Date()
+            }
+        }
         let artURL = URL(string: parts[4])
         return (info, artURL)
     }

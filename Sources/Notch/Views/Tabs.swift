@@ -8,17 +8,18 @@ struct MusicTabView: View {
     private var info: NowPlayingInfo { music.info }
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 10) {
+        VStack(spacing: 5) {
+            // Top: art · title/artist · dancing bars
+            HStack(spacing: 9) {
                 artwork
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.white.opacity(0.12)))
+                    .frame(width: 36, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.12)))
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(info.hasContent ? info.title : "Nothing playing")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .lineLimit(2)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
                     if info.hasContent {
                         Text(info.artist)
                             .font(.system(size: 10.5))
@@ -26,16 +27,25 @@ struct MusicTabView: View {
                             .lineLimit(1)
                     }
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: 4)
+
+                if info.isPlaying {
+                    DancingBars(color: info.accentColor ?? .white)
+                        .frame(width: 14, height: 14)
+                }
             }
 
-            Spacer(minLength: 0)
+            // Middle: elapsed · progress · remaining (draggable scrubber)
+            MusicProgressLine(info: info) { music.seek(to: $0) }
 
+            // Bottom: ⏮ ⏯ ⏭ centred
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
                 control("backward.fill", size: 13) { music.previous() }
                 Spacer().frame(width: 26)
-                control(info.isPlaying ? "pause.fill" : "play.fill", size: 17) { music.togglePlayPause() }
+                PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
+                    music.togglePlayPause()
+                }
                 Spacer().frame(width: 26)
                 control("forward.fill", size: 13) { music.next() }
                 Spacer(minLength: 0)
@@ -66,6 +76,140 @@ struct MusicTabView: View {
             }
         }
     }
+}
+
+/// Play/pause with two pieces of feedback: a ripple of white that expands out + fades
+/// behind the icon on every tap, and a smooth SF Symbol replace transition between
+/// the play and pause glyphs.
+private struct PlayPauseButton: View {
+    let isPlaying: Bool
+    let enabled: Bool
+    let action: () -> Void
+
+    @State private var tapToken = 0
+    @State private var rippleScale: CGFloat = 0.55
+    @State private var rippleOpacity: Double = 0
+
+    var body: some View {
+        Button {
+            tapToken &+= 1
+            action()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(.white)
+                    .frame(width: 30, height: 30)
+                    .scaleEffect(rippleScale)
+                    .opacity(rippleOpacity)
+                    .allowsHitTesting(false)
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(.easeInOut(duration: 0.18), value: isPlaying)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.3)
+        .task(id: tapToken) {
+            guard tapToken > 0 else { return }
+            // Snap to start state, then animate the expand-and-fade.
+            rippleScale = 0.55
+            rippleOpacity = 0.30
+            await Task.yield()
+            withAnimation(.easeOut(duration: 0.42)) {
+                rippleScale = 1.7
+                rippleOpacity = 0
+            }
+        }
+    }
+}
+
+/// Slim, draggable scrubber. Ticks live via `TimelineView` between data refreshes;
+/// while you drag it, the labels & fill follow your finger and on release we tell the
+/// player to seek to that time.
+private struct MusicProgressLine: View {
+    let info: NowPlayingInfo
+    let onSeek: (Double) -> Void
+
+    @State private var dragFraction: CGFloat?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+            let total = info.duration ?? 0
+            let liveElapsed = currentElapsed.clamped(to: 0...max(total, 0))
+            let liveFraction: CGFloat = total > 0 ? CGFloat(liveElapsed / total) : 0
+            let displayFraction = dragFraction ?? liveFraction
+            let displaySecs = Double(displayFraction) * total
+
+            HStack(spacing: 7) {
+                Text(format(displaySecs))
+                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(width: 26, alignment: .leading)
+
+                scrubber(fraction: displayFraction, totalSeconds: total)
+
+                Text("-\(format(max(0, total - displaySecs)))")
+                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(width: 30, alignment: .trailing)
+            }
+        }
+        .opacity(info.duration ?? 0 > 0 ? 1 : 0.35)
+    }
+
+    private func scrubber(fraction: CGFloat, totalSeconds total: Double) -> some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                // Tall transparent layer = generous hit area; the visible bar is thin.
+                Color.clear.contentShape(Rectangle())
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.16))
+                    Capsule().fill(info.accentColor ?? .white)
+                        .frame(width: g.size.width * fraction)
+                }
+                .frame(height: dragFraction == nil ? 2.5 : 3.5)   // a touch thicker while dragging
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        guard total > 0 else { return }
+                        dragFraction = clamp01(v.location.x / g.size.width)
+                    }
+                    .onEnded { v in
+                        guard total > 0 else { dragFraction = nil; return }
+                        let f = clamp01(v.location.x / g.size.width)
+                        onSeek(Double(f) * total)
+                        // Hand back to the live tick *after* the manager has settled
+                        // the optimistic state so the bar doesn't snap.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            dragFraction = nil
+                        }
+                    }
+            )
+        }
+        .frame(height: 14)
+    }
+
+    private var currentElapsed: Double {
+        guard let e = info.elapsed else { return 0 }
+        guard info.isPlaying, let at = info.elapsedAt else { return e }
+        return e + Date().timeIntervalSince(at)
+    }
+
+    private func clamp01(_ x: CGFloat) -> CGFloat { min(1, max(0, x)) }
+
+    private func format(_ s: Double) -> String {
+        let v = max(0, Int(s.rounded()))
+        return String(format: "%d:%02d", v / 60, v % 60)
+    }
+}
+
+private extension Comparable {
+    func clamped(to r: ClosedRange<Self>) -> Self { min(max(self, r.lowerBound), r.upperBound) }
 }
 
 // MARK: - Screenshots

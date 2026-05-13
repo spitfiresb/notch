@@ -42,52 +42,30 @@ struct NotchRootView: View {
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }
 
-    /// Asymmetric: fade + slide in when *appearing*; on *disappearance*, a zero-duration
-    /// opacity transition so the old layout vanishes immediately (no lingering ghost
-    /// while the blob shrinks back). `.identity` was wrong here — it actually keeps the
-    /// view visible for the full transition duration before snapping away.
-    private static let contentTransition: AnyTransition = .asymmetric(
-        insertion: .opacity.combined(with: .offset(y: 6)),
-        removal: .opacity.animation(.linear(duration: 0)))
-
+    /// Peek and tab content are stacked & always present (just opacity-toggled) so they
+    /// can share the *animated* `.frame(blobSize)` of the parent — the layout grows /
+    /// shrinks with the blob, so right-edge elements (dancing bars) never escape the
+    /// black silhouette during the open/close sweep.
     @ViewBuilder private var content: some View {
-        if let toast = notch.toast {
-            ScreenshotToastView(toast: toast)
-                .padding(.horizontal, 14)
-                .foregroundStyle(.white)
-                .transition(Self.contentTransition)
-        } else if notch.isOpen {
-            VStack(spacing: 7) {
-                tabBar
-                tabContent.frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 11)
-            .foregroundStyle(.white)
-            .transition(Self.contentTransition)
-        } else {
-            CollapsedPeek().transition(.identity)
-        }
-    }
+        ZStack {
+            CollapsedPeek()
+                .opacity(notch.isOpen || notch.toast != nil ? 0 : 1)
 
-    private var tabBar: some View {
-        HStack(spacing: 4) {
-            ForEach(NotchState.Tab.allCases) { tab in
-                Button { notch.open(tab: tab) } label: {
-                    Image(systemName: tab.symbol)
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 30, height: 19)
-                        .background(notch.tab == tab ? Color.white.opacity(0.18) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 6))
-                        .contentShape(Rectangle())
-                        .foregroundStyle(notch.tab == tab ? .white : .white.opacity(0.55))
-                }
-                .buttonStyle(.plain)
+            tabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 22)
+                .padding(.top, 10)
+                .padding(.bottom, 10)
+                .foregroundStyle(.white)
+                .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
+
+            if let toast = notch.toast {
+                ScreenshotToastView(toast: toast)
+                    .padding(.horizontal, 14)
+                    .foregroundStyle(.white)
+                    .transition(.opacity)
             }
-            Spacer(minLength: 0)
         }
-        .frame(height: 19)
     }
 
     @ViewBuilder private var tabContent: some View {
@@ -99,52 +77,56 @@ struct NotchRootView: View {
     }
 }
 
-/// What's visible when the notch is collapsed — a hint of the current track.
+/// What's visible when the notch is collapsed — just the dancing bars on the right.
+/// Padding/anchoring match the music tab's bars exactly so the cross-fade between
+/// "peek" and "tab" lands the bars on the same pixel — they look like one element
+/// staying put while the rest of the tab fades in around them.
 private struct CollapsedPeek: View {
     @EnvironmentObject private var music: NowPlayingManager
 
     private var showing: Bool { music.info.isPlaying }
 
     var body: some View {
-        HStack(spacing: 8) {
-            artwork
-                .frame(width: 18, height: 18)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+        HStack {
             Spacer(minLength: 0)
-            EqualizerBars()
-                .frame(width: 15, height: 11)
-                .opacity(0.9)
+            DancingBars(color: music.info.accentColor ?? .white)
+                .frame(width: 14, height: 14)
         }
-        .padding(.horizontal, 13)
+        .padding(.horizontal, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .opacity(showing ? 1 : 0)
     }
-
-    @ViewBuilder private var artwork: some View {
-        if let image = music.info.artwork {
-            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-        } else {
-            Color.white.opacity(0.15)
-        }
-    }
 }
 
-/// Three little bars bobbing up and down.
-struct EqualizerBars: View {
-    @State private var animating = false
-    private let heights: [CGFloat] = [0.45, 1.0, 0.65]
+/// Three bars whose heights wiggle independently every frame — driven by
+/// `TimelineView(.animation)` so it's continuous, not a stepped wave. Tinted with
+/// the album-art accent.
+struct DancingBars: View {
+    var color: Color = .white
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 2) {
-            ForEach(0..<3, id: \.self) { i in
-                Capsule(style: .continuous)
-                    .fill(.white)
-                    .frame(maxHeight: .infinity)
-                    .scaleEffect(y: animating ? heights[i] : heights[(i + 1) % 3], anchor: .bottom)
-                    .animation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true).delay(Double(i) * 0.12),
-                               value: animating)
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: 2) {
+                bar(height: scale(t, phase: 0.0))
+                bar(height: scale(t, phase: 1.7))
+                bar(height: scale(t, phase: 3.4))
             }
         }
-        .onAppear { animating = true }
+    }
+
+    private func bar(height: CGFloat) -> some View {
+        Capsule(style: .continuous)
+            .fill(color)
+            .frame(width: 2.5)
+            .frame(maxHeight: .infinity)
+            .scaleEffect(y: height, anchor: .center)
+    }
+
+    /// Two summed sines at different frequencies → an organic, non-repeating wiggle.
+    private func scale(_ t: Double, phase: Double) -> CGFloat {
+        let a = sin(t * 5.2 + phase)        * 0.5 + 0.5
+        let b = sin(t * 9.7 + phase * 2.1)  * 0.5 + 0.5
+        return CGFloat(0.22 + (a * 0.6 + b * 0.4) * 0.78)
     }
 }

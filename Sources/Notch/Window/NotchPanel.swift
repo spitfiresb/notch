@@ -13,8 +13,15 @@ enum ScreenMetrics {
         return s.safeAreaInsets.top > 0
     }
 
+    /// Height of the macOS menu bar on the menu-bar screen. Matches the hardware
+    /// notch's "safe area" on notched Macs.
+    static var menuBarHeight: CGFloat {
+        guard let s = screen else { return 24 }
+        return max(20, s.frame.maxY - s.visibleFrame.maxY)
+    }
+
     /// Size of the collapsed black "pill". Matches the hardware notch when there is one,
-    /// otherwise a sensible simulated size sitting over the middle of the menu bar.
+    /// otherwise a simulated pill whose height is exactly the menu bar.
     static var notchSize: CGSize {
         if let s = screen, hasRealNotch {
             let left = s.auxiliaryTopLeftArea?.width ?? 0
@@ -22,13 +29,13 @@ enum ScreenMetrics {
             let width = max(180, s.frame.width - left - right)
             return CGSize(width: width, height: s.safeAreaInsets.top)
         }
-        return CGSize(width: 220, height: 32)
+        return CGSize(width: 220, height: menuBarHeight)
     }
 
     /// Size of the expanded panel. The window is *always* this size (top-centre,
     /// transparent around the blob when collapsed) so the open/close grow can be a
     /// pure, smooth SwiftUI animation with no window-resize jank.
-    static let expandedSize = CGSize(width: 300, height: 128)
+    static let expandedSize = CGSize(width: 300, height: 108)
 
     /// Compact size used for the transient "screenshot copied" banner.
     static let toastSize = CGSize(width: 252, height: 46)
@@ -70,7 +77,21 @@ struct NotchShape: Shape {
 /// (`ScreenMetrics.expandedSize`); the blob inside grows/shrinks with SwiftUI.
 /// Mouse events are ignored while collapsed so the menu bar underneath stays usable.
 final class NotchPanel: NSPanel {
+    private let hosting: SwipeHostingView<AnyView>
+
+    /// Callback fired on a horizontal two-finger swipe over the panel. `dir` is +1
+    /// for swipe-left (→ next tab) and -1 for swipe-right (→ previous tab), matching
+    /// natural-scrolling direction.
+    var onHorizontalSwipe: ((Int) -> Void)? {
+        get { hosting.onHorizontalSwipe }
+        set { hosting.onHorizontalSwipe = newValue }
+    }
+
     init(rootView: some View) {
+        let host = SwipeHostingView(rootView: AnyView(rootView))
+        host.autoresizingMask = [.width, .height]
+        self.hosting = host
+
         super.init(contentRect: NSRect(origin: .zero, size: ScreenMetrics.expandedSize),
                    styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
@@ -86,9 +107,7 @@ final class NotchPanel: NSPanel {
         hidesOnDeactivate = false
         ignoresMouseEvents = true   // collapsed at launch
 
-        let hosting = NSHostingView(rootView: rootView)
-        hosting.autoresizingMask = [.width, .height]
-        contentView = hosting
+        contentView = host
     }
 
     override var canBecomeKey: Bool { true }
@@ -113,5 +132,39 @@ final class NotchPanel: NSPanel {
     func show() {
         reposition()
         orderFrontRegardless()
+    }
+}
+
+/// NSHostingView that watches for two-finger horizontal swipes and reports them.
+/// Scroll events over an inner NSScrollView (e.g. the Screenshots strip) are consumed
+/// there first and never reach us, so swipe-to-switch only fires on tabs with no
+/// horizontal scroller.
+final class SwipeHostingView<Root: View>: NSHostingView<Root> {
+    var onHorizontalSwipe: ((Int) -> Void)?
+
+    private var firedThisGesture = false
+    private var lastEventTime: TimeInterval = 0
+
+    override func scrollWheel(with event: NSEvent) {
+        let now = ProcessInfo.processInfo.systemUptime
+        // A new swipe is either a fresh `.began` phase (trackpad) or a clear pause
+        // since the last event (mouse-wheel / momentum that already settled).
+        if event.phase.contains(.began) || now - lastEventTime > 0.35 {
+            firedThisGesture = false
+        }
+        lastEventTime = now
+
+        let dx = event.scrollingDeltaX
+        let dy = event.scrollingDeltaY
+        if !firedThisGesture,
+           abs(dx) > 5,
+           abs(dx) > abs(dy) * 1.3 {
+            // Natural scrolling: a left swipe yields negative dx — that should move you
+            // to the *next* tab (so swipe-left = music → screenshots).
+            let dir = dx < 0 ? 1 : -1
+            onHorizontalSwipe?(dir)
+            firedThisGesture = true
+        }
+        super.scrollWheel(with: event)
     }
 }
