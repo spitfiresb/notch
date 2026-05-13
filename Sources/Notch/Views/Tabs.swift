@@ -127,22 +127,21 @@ private struct PlayPauseButton: View {
     private let size: CGFloat = 30
 
     var body: some View {
+        // One simple cross-fade — the icons don't scale individually (that was reading
+        // as a second motion on top of the button's own scale). Pure opacity swap.
         ZStack {
-            Image(systemName: "play.fill")
-                .opacity(renderIsPlaying ? 0 : 1)
-                .scaleEffect(renderIsPlaying ? 0.7 : 1)
-            Image(systemName: "pause.fill")
-                .opacity(renderIsPlaying ? 1 : 0)
-                .scaleEffect(renderIsPlaying ? 1 : 0.7)
+            Image(systemName: "play.fill").opacity(renderIsPlaying ? 0 : 1)
+            Image(systemName: "pause.fill").opacity(renderIsPlaying ? 1 : 0)
         }
         .foregroundStyle(.white)
         .font(.system(size: 17, weight: .medium))
-        .animation(.easeOut(duration: 0.09), value: renderIsPlaying)
+        .animation(.easeOut(duration: 0.16), value: renderIsPlaying)
         .frame(width: size, height: size)
         .contentShape(Rectangle())
+        // Single shared ease for press + hover scale so they read as one motion.
         .scaleEffect(scale)
-        .animation(.easeOut(duration: pressed ? 0.025 : 0.09), value: pressed)
-        .animation(.easeOut(duration: 0.14), value: hovering)
+        .animation(.easeOut(duration: 0.16), value: pressed)
+        .animation(.easeOut(duration: 0.16), value: hovering)
         .opacity(enabled ? 1 : 0.3)
         .onHover { if enabled { hovering = $0 } }
         .gesture(
@@ -152,24 +151,28 @@ private struct PlayPauseButton: View {
                     pressed = false
                     guard enabled else { return }
                     let bounds = CGRect(x: 0, y: 0, width: size, height: size)
-                    if bounds.contains(v.location) { action() }
-                    // `action()` flips isPlaying synchronously; the .onChange below
-                    // picks it up now that pressed is false and swaps the icon.
+                    if bounds.contains(v.location) {
+                        action()
+                        // Flip the render state in the SAME runloop tick as `pressed=false`
+                        // so the icon cross-fade starts the instant the button starts
+                        // growing back — no hesitation while we wait for `.onChange` to
+                        // fire after the parent's re-render.
+                        renderIsPlaying.toggle()
+                    }
                 }
         )
         .onAppear { renderIsPlaying = isPlaying }
         .onChange(of: isPlaying) { _, new in
-            // Tap-driven flips only get here once `pressed` is false (set above), so
-            // the icon swap is naturally paired with the grow-back. External changes
-            // (poll) update immediately when no press is active.
-            if !pressed { renderIsPlaying = new }
+            // Catch external changes (poll) — local toggle above already synced for taps.
+            if renderIsPlaying != new { renderIsPlaying = new }
         }
     }
 
     private var scale: CGFloat {
         guard enabled else { return 1 }
-        if pressed { return 0.82 }
-        if hovering { return 1.10 }
+        // Modest swings so press / hover don't fight each other for amplitude.
+        if pressed { return 0.90 }
+        if hovering { return 1.06 }
         return 1.0
     }
 }
