@@ -41,29 +41,17 @@ struct MusicTabView: View {
             // Bottom: ⏮ ⏯ ⏭ centred
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
-                control("backward.fill", size: 13) { music.previous() }
+                TransportButton(symbol: "backward.fill", size: 13, enabled: info.hasContent) { music.previous() }
                 Spacer().frame(width: 26)
                 PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
                     music.togglePlayPause()
                 }
                 Spacer().frame(width: 26)
-                control("forward.fill", size: 13) { music.next() }
+                TransportButton(symbol: "forward.fill", size: 13, enabled: info.hasContent) { music.next() }
                 Spacer(minLength: 0)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func control(_ symbol: String, size: CGFloat, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: size, weight: .medium))
-                .frame(width: size + 12, height: size + 8)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!info.hasContent)
-        .opacity(info.hasContent ? 1 : 0.3)
     }
 
     @ViewBuilder private var artwork: some View {
@@ -78,52 +66,111 @@ struct MusicTabView: View {
     }
 }
 
-/// Play/pause with two pieces of feedback: a ripple of white that expands out + fades
-/// behind the icon on every tap, and a smooth SF Symbol replace transition between
-/// the play and pause glyphs.
+/// Side transport (⏮ / ⏭) — slightly grey by default, brightens & scales up on hover.
+private struct TransportButton: View {
+    let symbol: String
+    let size: CGFloat
+    let enabled: Bool
+    let action: () -> Void
+
+    @State private var hovering = false
+    @State private var pressed = false
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(.white.opacity(hovering ? 1 : 0.55))
+            .frame(width: size + 12, height: size + 8)
+            .contentShape(Rectangle())
+            .scaleEffect(scale)
+            .animation(.easeOut(duration: pressed ? 0.05 : 0.16), value: pressed)
+            .animation(.easeOut(duration: 0.14), value: hovering)
+            .opacity(enabled ? 1 : 0.3)
+            .onHover { if enabled { hovering = $0 } }
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { _ in if enabled && !pressed { pressed = true } }
+                    .onEnded { v in
+                        pressed = false
+                        guard enabled else { return }
+                        let bounds = CGRect(x: 0, y: 0, width: size + 12, height: size + 8)
+                        if bounds.contains(v.location) { action() }
+                    }
+            )
+    }
+
+    private var scale: CGFloat {
+        guard enabled else { return 1 }
+        if pressed { return 0.82 }
+        if hovering { return 1.10 }
+        return 1.0
+    }
+}
+
+/// Play/pause built from a custom press gesture (no `Button` — avoids macOS's default
+/// pressed-state grey tint that was layering over our own animation). Behaviour:
+///   • hover → button scales up ~1.1
+///   • press → snaps down to 0.82 in ~50ms (almost instant)
+///   • release → action fires, the icon cross-fade kicks in, and the scale grows back
+///               to its current target (1.0 or 1.1 if still hovering) — all in sync.
 private struct PlayPauseButton: View {
     let isPlaying: Bool
     let enabled: Bool
     let action: () -> Void
 
-    @State private var tapToken = 0
-    @State private var rippleScale: CGFloat = 0.55
-    @State private var rippleOpacity: Double = 0
+    /// What's actually drawn; only updated on release so the icon swap is paired
+    /// with the grow-back, not the depress.
+    @State private var renderIsPlaying = false
+    @State private var hovering = false
+    @State private var pressed = false
+
+    private let size: CGFloat = 30
 
     var body: some View {
-        Button {
-            tapToken &+= 1
-            action()
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(.white)
-                    .frame(width: 30, height: 30)
-                    .scaleEffect(rippleScale)
-                    .opacity(rippleOpacity)
-                    .allowsHitTesting(false)
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 17, weight: .medium))
-                    .contentTransition(.symbolEffect(.replace))
-                    .animation(.easeInOut(duration: 0.18), value: isPlaying)
-                    .frame(width: 30, height: 30)
-                    .contentShape(Rectangle())
-            }
+        ZStack {
+            Image(systemName: "play.fill")
+                .opacity(renderIsPlaying ? 0 : 1)
+                .scaleEffect(renderIsPlaying ? 0.7 : 1)
+            Image(systemName: "pause.fill")
+                .opacity(renderIsPlaying ? 1 : 0)
+                .scaleEffect(renderIsPlaying ? 1 : 0.7)
         }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
+        .foregroundStyle(.white)
+        .font(.system(size: 17, weight: .medium))
+        .animation(.easeOut(duration: 0.09), value: renderIsPlaying)
+        .frame(width: size, height: size)
+        .contentShape(Rectangle())
+        .scaleEffect(scale)
+        .animation(.easeOut(duration: pressed ? 0.025 : 0.09), value: pressed)
+        .animation(.easeOut(duration: 0.14), value: hovering)
         .opacity(enabled ? 1 : 0.3)
-        .task(id: tapToken) {
-            guard tapToken > 0 else { return }
-            // Snap to start state, then animate the expand-and-fade.
-            rippleScale = 0.55
-            rippleOpacity = 0.30
-            await Task.yield()
-            withAnimation(.easeOut(duration: 0.42)) {
-                rippleScale = 1.7
-                rippleOpacity = 0
-            }
+        .onHover { if enabled { hovering = $0 } }
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .onChanged { _ in if enabled && !pressed { pressed = true } }
+                .onEnded { v in
+                    pressed = false
+                    guard enabled else { return }
+                    let bounds = CGRect(x: 0, y: 0, width: size, height: size)
+                    if bounds.contains(v.location) { action() }
+                    // `action()` flips isPlaying synchronously; the .onChange below
+                    // picks it up now that pressed is false and swaps the icon.
+                }
+        )
+        .onAppear { renderIsPlaying = isPlaying }
+        .onChange(of: isPlaying) { _, new in
+            // Tap-driven flips only get here once `pressed` is false (set above), so
+            // the icon swap is naturally paired with the grow-back. External changes
+            // (poll) update immediately when no press is active.
+            if !pressed { renderIsPlaying = new }
         }
+    }
+
+    private var scale: CGFloat {
+        guard enabled else { return 1 }
+        if pressed { return 0.82 }
+        if hovering { return 1.10 }
+        return 1.0
     }
 }
 
@@ -135,6 +182,7 @@ private struct MusicProgressLine: View {
     let onSeek: (Double) -> Void
 
     @State private var dragFraction: CGFloat?
+    @State private var hovering = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { _ in
@@ -162,7 +210,9 @@ private struct MusicProgressLine: View {
     }
 
     private func scrubber(fraction: CGFloat, totalSeconds total: Double) -> some View {
-        GeometryReader { g in
+        // The bar gets noticeably thicker on hover *or* while dragging.
+        let expanded = hovering || dragFraction != nil
+        return GeometryReader { g in
             ZStack(alignment: .leading) {
                 // Tall transparent layer = generous hit area; the visible bar is thin.
                 Color.clear.contentShape(Rectangle())
@@ -171,8 +221,10 @@ private struct MusicProgressLine: View {
                     Capsule().fill(info.accentColor ?? .white)
                         .frame(width: g.size.width * fraction)
                 }
-                .frame(height: dragFraction == nil ? 2.5 : 3.5)   // a touch thicker while dragging
+                .frame(height: expanded ? 5 : 2.5)
+                .animation(.easeOut(duration: 0.14), value: expanded)
             }
+            .onHover { hovering = $0 }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { v in

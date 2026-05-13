@@ -41,9 +41,18 @@ final class NowPlayingManager: ObservableObject {
         refresh()
     }
 
-    func togglePlayPause() { command(.togglePlayPause, spotify: "playpause") }
-    func next()            { command(.nextTrack, spotify: "next track") }
-    func previous()        { command(.previousTrack, spotify: "previous track") }
+    func togglePlayPause() {
+        // Optimistic flip — the icon swap & scrubber should react immediately,
+        // before the round-trip to MediaRemote / Spotify completes.
+        if info.isPlaying, let e = info.elapsed, let at = info.elapsedAt {
+            info.elapsed = e + Date().timeIntervalSince(at)   // freeze scrubber
+        }
+        info.elapsedAt = Date()
+        info.isPlaying.toggle()
+        command(.togglePlayPause, spotify: "playpause")
+    }
+    func next()     { command(.nextTrack, spotify: "next track") }
+    func previous() { command(.previousTrack, spotify: "previous track") }
 
     /// Seek the current track to `seconds`. Tries MediaRemote first; falls back to
     /// Spotify Apple Events if the system path isn't available.
