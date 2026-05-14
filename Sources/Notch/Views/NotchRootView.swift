@@ -88,6 +88,8 @@ private struct CollapsedPeek: View {
     /// so the user can still see what's playing at a glance.
     private var showing: Bool { music.info.hasContent }
 
+    private static let trackFade: Animation = .easeInOut(duration: 0.34)
+
     var body: some View {
         HStack(spacing: 0) {
             artwork
@@ -95,23 +97,29 @@ private struct CollapsedPeek: View {
                 .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .strokeBorder(.white.opacity(0.12)))
-                .opacity(music.info.artwork != nil ? 1 : 0)
+                .opacity(music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
-            DancingBars(color: music.info.accentColor ?? .white,
+            DancingBars(color: music.displayAccent,
                         isPlaying: music.info.isPlaying)
                 .frame(width: 20, height: 14)
         }
         .padding(.horizontal, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .opacity(showing ? 1 : 0)
+        .animation(Self.trackFade, value: music.displayKey)
+        .animation(Self.trackFade, value: music.displayAccent)
     }
 
     @ViewBuilder private var artwork: some View {
-        if let image = music.info.artwork {
-            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-        } else {
-            Color.clear
+        Group {
+            if let image = music.displayArt {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Color.clear
+            }
         }
+        .id(music.displayKey)
+        .transition(.opacity)
     }
 }
 

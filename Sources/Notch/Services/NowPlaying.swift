@@ -27,6 +27,17 @@ struct NowPlayingInfo: Equatable {
 final class NowPlayingManager: ObservableObject {
     @Published private(set) var info = NowPlayingInfo()
 
+    /// Last non-nil artwork seen — survives the brief gap during a track change so views
+    /// can cross-fade between two real images instead of flashing through a placeholder.
+    /// Cleared only when playback truly stops (`info.hasContent == false`).
+    @Published private(set) var displayArt: NSImage?
+    /// Same idea for the album-art accent: holds the previous track's tint until the new
+    /// one is computed, so the dancing bars don't flash white between songs.
+    @Published private(set) var displayAccent: Color = .white
+    /// Stable identity for the *currently displayed* track. Changes only when artwork or
+    /// title flips to a new song — views use it to drive cross-fade transitions.
+    @Published private(set) var displayKey: String = ""
+
     private let mr = MediaRemoteBridge()
     private var pollTimer: Timer?
     private var usingSpotifyFallback = false
@@ -92,7 +103,23 @@ final class NowPlayingManager: ObservableObject {
                 self.usingSpotifyFallback = false
                 self.info = NowPlayingInfo()
             }
+            self.syncDisplayState()
         }
+    }
+
+    /// Pull `info` into the `display*` buffers without ever passing through nil, so the
+    /// UI always has a real image / color to draw and views can animate the swap.
+    private func syncDisplayState() {
+        if !info.hasContent {
+            displayArt = nil
+            displayAccent = .white
+            displayKey = ""
+            return
+        }
+        if let art = info.artwork { displayArt = art }
+        if let accent = info.accentColor { displayAccent = accent }
+        let key = info.artworkKey ?? "\(info.title)|\(info.artist)"
+        if key != displayKey { displayKey = key }
     }
 
     private func attachArtwork(_ info: inout NowPlayingInfo) {
@@ -123,6 +150,7 @@ final class NowPlayingManager: ObservableObject {
                 if self.info.artworkKey == key || self.info.artwork == nil {
                     self.info.artwork = image
                     self.info.accentColor = accent
+                    self.syncDisplayState()
                 }
             }
         }.resume()

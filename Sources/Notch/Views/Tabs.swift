@@ -7,6 +7,8 @@ struct MusicTabView: View {
     @EnvironmentObject private var music: NowPlayingManager
     private var info: NowPlayingInfo { music.info }
 
+    private static let trackFade: Animation = .easeInOut(duration: 0.34)
+
     var body: some View {
         VStack(spacing: 5) {
             // Top: art · title/artist · dancing bars
@@ -20,17 +22,19 @@ struct MusicTabView: View {
                     Text(info.hasContent ? info.title : "Nothing playing")
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
+                        .contentTransition(.opacity)
                     if info.hasContent {
                         Text(info.artist)
                             .font(.system(size: 10.5))
                             .foregroundStyle(.white.opacity(0.6))
                             .lineLimit(1)
+                            .contentTransition(.opacity)
                     }
                 }
                 Spacer(minLength: 4)
 
                 if info.hasContent {
-                    DancingBars(color: info.accentColor ?? .white,
+                    DancingBars(color: music.displayAccent,
                                 isPlaying: info.isPlaying)
                         .frame(width: 20, height: 14)
                 }
@@ -53,21 +57,37 @@ struct MusicTabView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // One fade applies to every track-driven change: art swap, title/artist
+        // text cross-fade, and the dancing-bars accent colour interpolation.
+        .animation(Self.trackFade, value: music.displayKey)
+        .animation(Self.trackFade, value: info.title)
+        .animation(Self.trackFade, value: info.artist)
+        .animation(Self.trackFade, value: music.displayAccent)
     }
 
+    /// Album art is bound to `displayKey` so SwiftUI treats a track change as a
+    /// view replacement — `.transition(.opacity)` then gives us a cross-fade
+    /// between the old and new artwork instead of an instant swap.
     @ViewBuilder private var artwork: some View {
-        if let image = info.artwork {
-            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-        } else {
-            ZStack {
-                Color.white.opacity(0.08)
-                Image(systemName: "music.note").font(.system(size: 15)).foregroundStyle(.white.opacity(0.4))
+        Group {
+            if let image = music.displayArt {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Color.white.opacity(0.08)
+                    Image(systemName: "music.note")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
             }
         }
+        .id(music.displayKey)
+        .transition(.opacity)
     }
 }
 
 /// Side transport (⏮ / ⏭) — slightly grey by default, brightens & scales up on hover.
+/// Hover and release use springs (gentle bounce / pop), press-down is a snappy ease.
 private struct TransportButton: View {
     let symbol: String
     let size: CGFloat
@@ -84,8 +104,12 @@ private struct TransportButton: View {
             .frame(width: size + 12, height: size + 8)
             .contentShape(Rectangle())
             .scaleEffect(scale)
-            .animation(.easeOut(duration: pressed ? 0.05 : 0.16), value: pressed)
-            .animation(.easeOut(duration: 0.14), value: hovering)
+            // press DOWN: snappy ease; press UP: spring with overshoot for the iOS-style "pop".
+            .animation(pressed
+                       ? .easeOut(duration: 0.12)
+                       : .spring(response: 0.68, dampingFraction: 0.5),
+                       value: pressed)
+            .animation(.spring(response: 0.32, dampingFraction: 0.62), value: hovering)
             .opacity(enabled ? 1 : 0.3)
             .onHover { if enabled { hovering = $0 } }
             .gesture(
@@ -102,8 +126,8 @@ private struct TransportButton: View {
 
     private var scale: CGFloat {
         guard enabled else { return 1 }
-        if pressed { return 0.82 }
-        if hovering { return 1.10 }
+        if pressed { return 0.78 }
+        if hovering { return 1.20 }
         return 1.0
     }
 }
@@ -134,15 +158,19 @@ private struct PlayPauseButton: View {
             Image(systemName: "play.fill").opacity(renderIsPlaying ? 0 : 1)
             Image(systemName: "pause.fill").opacity(renderIsPlaying ? 1 : 0)
         }
-        .foregroundStyle(.white)
+        // Grey at rest, brightens on hover — matches the side transport buttons.
+        .foregroundStyle(.white.opacity(hovering ? 1 : 0.55))
         .font(.system(size: 17, weight: .medium))
-        .animation(.easeOut(duration: 0.16), value: renderIsPlaying)
+        .animation(.easeOut(duration: 0.32), value: renderIsPlaying)
         .frame(width: size, height: size)
         .contentShape(Rectangle())
-        // Single shared ease for press + hover scale so they read as one motion.
         .scaleEffect(scale)
-        .animation(.easeOut(duration: 0.16), value: pressed)
-        .animation(.easeOut(duration: 0.16), value: hovering)
+        // Snappy press-down, bouncy spring release — Apple-style click pop.
+        .animation(pressed
+                   ? .easeOut(duration: 0.12)
+                   : .spring(response: 0.72, dampingFraction: 0.5),
+                   value: pressed)
+        .animation(.spring(response: 0.32, dampingFraction: 0.62), value: hovering)
         .opacity(enabled ? 1 : 0.3)
         .onHover { if enabled { hovering = $0 } }
         .gesture(
@@ -171,9 +199,8 @@ private struct PlayPauseButton: View {
 
     private var scale: CGFloat {
         guard enabled else { return 1 }
-        // Modest swings so press / hover don't fight each other for amplitude.
-        if pressed { return 0.90 }
-        if hovering { return 1.06 }
+        if pressed { return 0.82 }
+        if hovering { return 1.15 }
         return 1.0
     }
 }
