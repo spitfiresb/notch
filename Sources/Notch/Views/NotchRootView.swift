@@ -25,11 +25,26 @@ struct NotchRootView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
+            // Directional drop shadow — a blurred dark capsule positioned just under
+            // the blob's bottom edge. The all-around `.shadow()` we used to apply on
+            // the blob bled into the 8 pt cornerInset strips on the sides, painting
+            // them faintly gray; this confines the shadow to below the notch where it
+            // actually wants to be.
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.36))
+                .frame(width: max(0, blobSize.width - 40), height: 10)
+                .blur(radius: 10)
+                .offset(y: blobSize.height - 4)
+
             blobShape
                 .fill(.black)
-                .overlay(blobShape.stroke(Color.white.opacity(0.06), lineWidth: 1))
+                // Clip the stroke to the blob so the 1 pt line doesn't render its
+                // outer half in the cornerInset strips.
+                .overlay(
+                    blobShape.stroke(Color.white.opacity(0.06), lineWidth: 1)
+                        .clipShape(blobShape)
+                )
                 .frame(width: blobSize.width, height: blobSize.height)
-                .shadow(color: .black.opacity(0.28), radius: 11, y: 4)
 
             content
                 .frame(width: blobSize.width, height: blobSize.height)
