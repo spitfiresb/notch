@@ -209,8 +209,10 @@ struct DancingBars: View {
 
     @EnvironmentObject private var meter: AudioMeter
 
-    /// Low resting height when paused / silent — short, equal capsules.
-    private static let restHeight: CGFloat = 0.22
+    /// Low resting height when paused / silent — short, equal capsules. Sits a touch
+    /// above the playing-state floor (0.10) so pausing the music doesn't visually
+    /// pop the bars upward.
+    private static let restHeight: CGFloat = 0.14
     private static let barWidth: CGFloat = 1.8
     private static let spacing: CGFloat = 1.3
     private static let count = AudioMeter.bandCount
@@ -224,12 +226,16 @@ struct DancingBars: View {
             }
         } else if meter.isRunning {
             // Real audio — re-renders every time the meter publishes new levels.
+            // The envelope follower in AudioMeter handles the shape of the motion
+            // (per-band attack/release); this short easeOut just interpolates
+            // between successive publishes so the bar visibly travels through
+            // middle values at frame rate instead of stepping in discrete jumps.
             HStack(alignment: .center, spacing: Self.spacing) {
                 ForEach(0..<Self.count, id: \.self) { i in
                     bar(height: meter.bars[i])
                 }
             }
-            .animation(.easeOut(duration: 0.06), value: meter.bars)
+            .animation(.easeOut(duration: 0.07), value: meter.bars)
         } else {
             // Fallback: synthesized wiggle so playing-without-permission still feels alive.
             TimelineView(.animation) { context in
@@ -244,11 +250,14 @@ struct DancingBars: View {
     }
 
     private func bar(height: CGFloat) -> some View {
+        // No floor clamp here — callers pass the value they want (paused uses
+        // restHeight, real audio uses the meter's 0.10..1.0 range, fallback uses
+        // its own range). A `max()` here would silently squash the meter's floor.
         Capsule(style: .continuous)
             .fill(color)
             .frame(width: Self.barWidth)
             .frame(maxHeight: .infinity)
-            .scaleEffect(y: max(Self.restHeight, height), anchor: .center)
+            .scaleEffect(y: height, anchor: .center)
     }
 
     /// Two summed sines at different frequencies → an organic, non-repeating wiggle.

@@ -117,7 +117,9 @@ final class AudioMeter: ObservableObject {
         // before the IO proc starts firing.
         let sampleRate = (try? deviceSampleRate(aggregateDeviceID)) ?? 48_000
         for (i, fc) in Self.centerFrequencies.enumerated() {
-            biquads[i] = Biquad.bandpass(centerHz: fc, q: 1.4, sampleRate: sampleRate)
+            // Higher Q narrows each bandpass so adjacent bands stop overlapping —
+            // each bar reacts to its own slice of the spectrum and dances independently.
+            biquads[i] = Biquad.bandpass(centerHz: fc, q: 2.4, sampleRate: sampleRate)
         }
 
         var ioProcID: AudioDeviceIOProcID?
@@ -235,31 +237,42 @@ final class AudioMeter: ObservableObject {
         let rms = snapshot.load()
         var out = bars
         for i in 0..<Self.bandCount {
-            env[i] = follow(env: env[i], target: shape(rms[i]))
+            env[i] = follow(env: env[i], target: shape(rms[i], band: i), band: i)
             out[i] = env[i]
         }
         bars = out
     }
 
-    /// dB-scaled mapping: per-band RMS is converted to dBFS, then a window
-    /// [floor, ceil] is linearly mapped onto [0, 1]. Spreads music's actual dynamic
-    /// range across the full bar height instead of compressing the loud half together.
-    private func shape(_ rms: Double) -> CGFloat {
-        let floorDb = -58.0     // anything quieter than this lies at the rest line
-        let ceilDb  = -10.0     // anything louder pins to the top
+    // Per-band dB windows, tilted so the natural bass-heaviness of music doesn't pin
+    // the low bars at the top while the treble bars crawl. Each window is a narrow
+    // 30 dB slice — narrow window = steeper response curve = each band visibly
+    // swings from floor to ceiling instead of riding the upper half.
+    private static let floorDbPerBand: [Double] = [-44, -46, -50, -54, -58, -62]
+    private static let ceilDbPerBand:  [Double] = [-14, -16, -20, -24, -28, -32]
+
+    /// dB-scaled mapping: per-band RMS is converted to dBFS, then a per-band window
+    /// [floor, ceil] is linearly mapped onto [0, 1]. The visible bar range is 0.10..1.0
+    /// — a low floor so quiet moments actually look quiet.
+    private func shape(_ rms: Double, band: Int) -> CGFloat {
         let safe = max(rms, 1e-7)
         let db = 20 * log10(safe)
+        let floorDb = Self.floorDbPerBand[band]
+        let ceilDb  = Self.ceilDbPerBand[band]
         let v = (db - floorDb) / (ceilDb - floorDb)
         let clamped = min(1.0, max(0.0, v))
-        return 0.22 + CGFloat(clamped) * 0.78
+        return 0.10 + CGFloat(clamped) * 0.90
     }
 
-    private func follow(env: CGFloat, target: CGFloat) -> CGFloat {
-        // Asymmetric: very snappy attack so transients punch, faster release than before
-        // so the bars settle between hits instead of looking glued open.
-        let attack: CGFloat  = 0.7
-        let release: CGFloat = 0.32
-        let a = target > env ? attack : release
+    // Per-band attack/release. Highs are still snappier than lows, but rates are
+    // tuned so a peak takes 3–5 frames to reach and 6–10 frames to decay — slow
+    // enough that the bar visibly travels through the middle values instead of
+    // teleporting between floor and peak. The dB-window + floor changes carry
+    // the amplitude swing; the envelope's only job is to draw a smooth path.
+    private static let attackPerBand:  [CGFloat] = [0.42, 0.48, 0.54, 0.60, 0.66, 0.72]
+    private static let releasePerBand: [CGFloat] = [0.18, 0.22, 0.26, 0.30, 0.34, 0.38]
+
+    private func follow(env: CGFloat, target: CGFloat, band: Int) -> CGFloat {
+        let a = target > env ? Self.attackPerBand[band] : Self.releasePerBand[band]
         return env + (target - env) * a
     }
 
