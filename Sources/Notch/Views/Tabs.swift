@@ -18,14 +18,14 @@ struct MusicTabView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.12)))
 
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(info.hasContent ? info.title : "Nothing playing")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 13.5, weight: .semibold))
                         .lineLimit(1)
                         .contentTransition(.opacity)
                     if info.hasContent {
                         Text(info.artist)
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 11.5))
                             .foregroundStyle(.white.opacity(0.6))
                             .lineLimit(1)
                             .contentTransition(.opacity)
@@ -538,48 +538,6 @@ enum ScreenshotImage {
                     cont.resume(returning: nil); return
                 }
                 cont.resume(returning: NSImage(cgImage: cg, size: .zero))
-            }
-        }
-    }
-}
-
-// MARK: - Settings
-
-struct SettingsTabView: View {
-    @State private var refresh = false   // toggled to re-read live permission state
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            statusRow("Accessibility", ok: Permissions.accessibilityTrusted) { Permissions.openAccessibilitySettings() }
-            statusRow("Control Spotify", ok: Permissions.spotifyControllable) { Permissions.openAutomationSettings() }
-            statusRow("Screenshot folder", ok: Permissions.probeScreenshotFolderAccess()) { Permissions.openFilesAndFoldersSettings() }
-            Spacer(minLength: 2)
-            HStack(spacing: 12) {
-                Button("Setup…") { AppDelegate.shared?.showOnboarding() }
-                Button("Refresh") { refresh.toggle() }
-                Spacer(minLength: 0)
-                Button("Quit") { NSApp.terminate(nil) }.foregroundStyle(.red.opacity(0.9))
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .medium))
-        }
-        .font(.system(size: 11))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .id(refresh)
-    }
-
-    private func statusRow(_ title: String, ok: Bool, openSettings: @escaping () -> Void) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(ok ? .green : .yellow)
-            Text(title)
-            Spacer(minLength: 0)
-            if !ok {
-                Button("Fix", action: openSettings)
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
             }
         }
     }

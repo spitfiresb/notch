@@ -31,13 +31,12 @@ struct ScreenshotToast: Equatable {
 @MainActor
 final class NotchState: ObservableObject {
     enum Tab: String, CaseIterable, Identifiable {
-        case music, screenshots, settings
+        case music, screenshots
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .music: "music.note"
             case .screenshots: "camera.viewfinder"
-            case .settings: "gearshape"
             }
         }
     }
@@ -45,6 +44,16 @@ final class NotchState: ObservableObject {
     @Published var isOpen = false
     @Published var tab: Tab = .music
     @Published var toast: ScreenshotToast?
+
+    /// `true` while Mission Control / App Exposé / Launchpad / Show Desktop is on
+    /// screen. The panel is fully hidden then so it doesn't cover the system overlay.
+    @Published var isSystemOverlayActive: Bool = false
+
+    /// 0…1 vertical hide progress for the notch contents, driven by the trackpad
+    /// swipe handler. Rendered as a content offset (not a window move) because the
+    /// window has `.stationary` collection behavior — WindowServer pins its
+    /// rendered frame during a Spaces transition and ignores live setFrame calls.
+    @Published var swipeOffset: CGFloat = 0
 
     /// While set & in the future, the hover-watcher won't auto-collapse.
     private(set) var pinnedUntil: Date?

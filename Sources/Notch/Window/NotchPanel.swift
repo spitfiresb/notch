@@ -97,8 +97,19 @@ final class NotchPanel: NSPanel {
                    backing: .buffered, defer: false)
 
         isFloatingPanel = true
-        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.assistiveTechHighWindow)))
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        // Just below the cursor window level — high enough that WindowServer's
+        // full-screen transition compositor won't draw over us.
+        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.cursorWindow)) - 1)
+        // We intentionally don't use `.fullScreenAuxiliary`. WindowServer occludes
+        // auxiliary windows the moment it detects a 3-finger gesture inside a
+        // full-screen Space (so its own cross-fade can run unobstructed). Instead,
+        // we'll explicitly pin the window to every Space via SpaceAttacher, which
+        // bypasses that special-case path.
+        var behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        if #available(macOS 13.0, *) {
+            behavior.insert(.canJoinAllApplications)
+        }
+        collectionBehavior = behavior
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
@@ -132,6 +143,9 @@ final class NotchPanel: NSPanel {
     func show() {
         reposition()
         orderFrontRegardless()
+        // Pin to every existing Space — including full-screen ones, which the
+        // removed `.fullScreenAuxiliary` would have handled (poorly).
+        SpaceAttacher.attachToAllSpaces(self)
     }
 }
 

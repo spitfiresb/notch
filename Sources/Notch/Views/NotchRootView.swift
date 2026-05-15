@@ -51,6 +51,11 @@ struct NotchRootView: View {
                 .clipShape(blobShape)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Trackpad-swipe hide: shift the contents up by up to one panel height.
+        // We do this here (not by moving the window) because the panel is
+        // `.stationary`, and WindowServer freezes window positions during a
+        // Spaces transition — the visible hide must be a render-time offset.
+        .offset(y: -notch.swipeOffset * ScreenMetrics.expandedSize.height)
         .animation(transitionAnim, value: notch.isOpen)
         .animation(Self.openAnim, value: notch.tab)
         .animation(transitionAnim, value: notch.toast)
@@ -87,7 +92,6 @@ struct NotchRootView: View {
         switch notch.tab {
         case .music:       MusicTabView()
         case .screenshots: ScreenshotTabView()
-        case .settings:    SettingsTabView()
         }
     }
 }
