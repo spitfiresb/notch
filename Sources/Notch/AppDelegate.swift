@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(env.music)
             .environmentObject(env.screenshots)
             .environmentObject(env.audioMeter)
+            .environmentObject(env.settings)
         let panel = NotchPanel(rootView: root)
         self.panel = panel
         panel.show()
@@ -355,5 +356,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onboarding = controller
         controller.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func showSettingsWindow() {
+        SettingsWindowController.present(settings: env.settings)
     }
 }

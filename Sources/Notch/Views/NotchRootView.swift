@@ -85,6 +85,17 @@ struct NotchRootView: View {
                     .foregroundStyle(.white)
                     .transition(.opacity)
             }
+
+            // Tiny settings gear, top-right of the expanded panel. Sits just past
+            // where the music tab's dancing bars end; grows on hover.
+            SettingsGearButton { AppDelegate.shared?.showSettingsWindow() }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.top, 4)
+                .padding(.trailing, 12)
+                .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
+                .allowsHitTesting(notch.isOpen && notch.toast == nil)
+                .animation(.easeOut(duration: 0.22), value: notch.isOpen)
+                .animation(.easeOut(duration: 0.18), value: notch.toast)
         }
     }
 
@@ -93,6 +104,53 @@ struct NotchRootView: View {
         case .music:       MusicTabView()
         case .screenshots: ScreenshotTabView()
         }
+    }
+}
+
+/// Tiny gear in the corner of the expanded notch. Default state is barely there
+/// (low opacity, scaled down so it reads as a faint dot); hover scales it up and
+/// brightens it so you can confirm what you're aiming at before clicking.
+private struct SettingsGearButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+    @State private var pressed = false
+
+    /// Hit-area / drag-cancel radius — releasing further than this from the icon
+    /// shouldn't fire the action.
+    private static let hitRadius: CGFloat = 22
+
+    private var scale: CGFloat {
+        let base: CGFloat = hovering ? 1.0 : 0.62
+        return pressed ? base * 0.86 : base
+    }
+
+    var body: some View {
+        Image(systemName: "gear")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.30))
+            .scaleEffect(scale)
+            .frame(width: 18, height: 18)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            // DragGesture(minimumDistance: 0) fires reliably on the first click
+            // inside a `.nonactivatingPanel`; SwiftUI's `.onTapGesture` here needs
+            // a focus-stealing first click before it recognizes a tap.
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { _ in if !pressed { pressed = true } }
+                    .onEnded { value in
+                        pressed = false
+                        let dx = value.location.x - 9
+                        let dy = value.location.y - 9
+                        if dx * dx + dy * dy <= Self.hitRadius * Self.hitRadius {
+                            action()
+                        }
+                    }
+            )
+            .animation(.spring(response: 0.32, dampingFraction: 0.62), value: hovering)
+            .animation(pressed ? .easeOut(duration: 0.10)
+                               : .spring(response: 0.42, dampingFraction: 0.55),
+                       value: pressed)
     }
 }
 

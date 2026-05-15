@@ -8,15 +8,29 @@ final class AppEnvironment: ObservableObject {
     let music = NowPlayingManager()
     let screenshots = ScreenshotWatcher()
     let audioMeter = AudioMeter()
+    let settings = SettingsStore()
+
+    private var cancellables = Set<AnyCancellable>()
 
     func start() {
         music.start()
         audioMeter.start()
         ScreenshotWatcher.disableSystemFloatingThumbnail()
         screenshots.onNewScreenshot = { [weak self] url in
-            ScreenshotWatcher.copyToPasteboard(url)
-            self?.notch.presentScreenshotToast(url: url)
+            guard let self else { return }
+            if self.settings.copyScreenshotToClipboard {
+                ScreenshotWatcher.copyToPasteboard(url)
+            }
+            self.notch.presentScreenshotToast(url: url)
         }
+        // Re-point the filesystem watcher whenever the user flips auto-routing,
+        // so the screenshot strip reflects the new folder without an app restart.
+        // Drop the initial value so this fires only on user-driven changes.
+        settings.$routeScreenshotsToFolder
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.screenshots.rebindToCurrentDirectory() }
+            .store(in: &cancellables)
         screenshots.start()
     }
 }

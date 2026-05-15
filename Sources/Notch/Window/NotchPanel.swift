@@ -159,6 +159,12 @@ final class SwipeHostingView<Root: View>: NSHostingView<Root> {
     private var firedThisGesture = false
     private var lastEventTime: TimeInterval = 0
 
+    /// Deliver the first click after switching apps directly to the SwiftUI
+    /// hit-target instead of letting AppKit eat it as the "activate / make-key"
+    /// click. Without this, the gear icon (and any other tap target) needs a
+    /// throwaway first click whenever focus is elsewhere.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func scrollWheel(with event: NSEvent) {
         let now = ProcessInfo.processInfo.systemUptime
         // A new swipe is either a fresh `.began` phase (trackpad) or a clear pause

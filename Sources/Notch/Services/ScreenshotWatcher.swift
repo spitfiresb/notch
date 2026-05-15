@@ -13,7 +13,7 @@ final class ScreenshotWatcher: ObservableObject {
     var onNewScreenshot: ((URL) -> Void)?
 
     private let maxCount = 7
-    private let dir: URL
+    private var dir: URL
     private var source: DispatchSourceFileSystemObject?
     private var dirFD: Int32 = -1
     private var pollTimer: Timer?
@@ -22,6 +22,23 @@ final class ScreenshotWatcher: ObservableObject {
     private var didInitialScan = false
 
     init() { dir = ScreenshotWatcher.screenshotDirectory }
+
+    /// Re-read `com.apple.screencapture.location` and re-target the filesystem
+    /// watch at the (possibly new) directory. Called when the user flips the
+    /// auto-route toggle so the screenshot strip re-binds without an app restart.
+    func rebindToCurrentDirectory() {
+        let newDir = ScreenshotWatcher.screenshotDirectory
+        guard newDir != dir else { return }
+        source?.cancel()                // setCancelHandler closes the fd
+        source = nil
+        dirFD = -1
+        dir = newDir
+        shots = []
+        newestSeen = .distantPast
+        didInitialScan = false
+        scan(initial: true)
+        startFolderWatch()
+    }
 
     nonisolated static var screenshotDirectory: URL {
         if let raw = CFPreferencesCopyAppValue("location" as CFString,

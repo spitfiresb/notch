@@ -1,0 +1,63 @@
+import Foundation
+import Combine
+
+/// User-configurable feature toggles. Backed by `UserDefaults` for app-local
+/// preferences and by the system `com.apple.screencapture` domain for settings
+/// that have to bridge into macOS itself.
+@MainActor
+final class SettingsStore: ObservableObject {
+    /// Copy each new screenshot to the system clipboard so it can be pasted immediately.
+    @Published var copyScreenshotToClipboard: Bool {
+        didSet { UserDefaults.standard.set(copyScreenshotToClipboard, forKey: Keys.copyScreenshot) }
+    }
+
+    /// Auto-route screenshots into `~/Desktop/Screenshots` instead of the bare Desktop,
+    /// managed via the system `com.apple.screencapture.location` preference. Flipping
+    /// this off restores macOS's default Desktop location.
+    @Published var routeScreenshotsToFolder: Bool {
+        didSet { Self.applyScreenshotRouting(enabled: routeScreenshotsToFolder) }
+    }
+
+    private enum Keys {
+        static let copyScreenshot = "settings.copyScreenshotToClipboard"
+    }
+
+    /// The managed folder we point macOS at when routing is enabled.
+    static var managedScreenshotURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop/Screenshots")
+    }
+
+    init() {
+        let defaults = UserDefaults.standard
+        // First launch: clipboard-copy preserves the prior always-on behavior.
+        if defaults.object(forKey: Keys.copyScreenshot) == nil {
+            defaults.set(true, forKey: Keys.copyScreenshot)
+        }
+        copyScreenshotToClipboard = defaults.bool(forKey: Keys.copyScreenshot)
+        // Routing reflects the live system pref — the user (or this app) may have
+        // already pointed `screencapture` somewhere; mirror reality, don't overwrite it.
+        routeScreenshotsToFolder = Self.detectScreenshotRouting()
+    }
+
+    /// True when `com.apple.screencapture.location` is already our managed path.
+    private static func detectScreenshotRouting() -> Bool {
+        guard let raw = CFPreferencesCopyAppValue("location" as CFString,
+                                                  "com.apple.screencapture" as CFString) as? String
+        else { return false }
+        return (raw as NSString).expandingTildeInPath == managedScreenshotURL.path
+    }
+
+    private static func applyScreenshotRouting(enabled: Bool) {
+        if enabled {
+            try? FileManager.default.createDirectory(at: managedScreenshotURL,
+                                                     withIntermediateDirectories: true)
+            CFPreferencesSetAppValue("location" as CFString,
+                                     managedScreenshotURL.path as CFString,
+                                     "com.apple.screencapture" as CFString)
+        } else {
+            CFPreferencesSetAppValue("location" as CFString, nil,
+                                     "com.apple.screencapture" as CFString)
+        }
+        CFPreferencesAppSynchronize("com.apple.screencapture" as CFString)
+    }
+}
