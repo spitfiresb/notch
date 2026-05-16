@@ -4,6 +4,9 @@ import ImageIO
 // MARK: - Music
 
 struct MusicTabView: View {
+    /// Shared with `CollapsedPeek` so `matchedGeometryEffect` can morph the
+    /// artwork and bars between the peek's small layout and our larger one.
+    let namespace: Namespace.ID
     @EnvironmentObject private var music: NowPlayingManager
     private var info: NowPlayingInfo { music.info }
 
@@ -17,6 +20,7 @@ struct MusicTabView: View {
                     .frame(width: 36, height: 36)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.12)))
+                    .matchedGeometryEffect(id: "chromeArt", in: namespace)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(info.hasContent ? info.title : "Nothing playing")
@@ -37,6 +41,7 @@ struct MusicTabView: View {
                     DancingBars(color: music.displayAccent,
                                 isPlaying: info.isPlaying)
                         .frame(width: 20, height: 14)
+                        .matchedGeometryEffect(id: "chromeBars", in: namespace)
                 }
             }
 

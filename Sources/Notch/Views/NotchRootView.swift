@@ -6,6 +6,12 @@ import SwiftUI
 struct NotchRootView: View {
     @EnvironmentObject private var notch: NotchState
 
+    /// Shared namespace for `matchedGeometryEffect` on the album art and dancing
+    /// bars — lets SwiftUI morph those elements between the peek's small layout
+    /// and the music tab's larger layout instead of cross-fading two copies
+    /// (which read as a teleport).
+    @Namespace private var chromeNS
+
     // Open is a touch slower than close so the content has time to register on the
     // eye; close feels right at 0.22s.
     private static let openAnim: Animation = .easeOut(duration: 0.32)
@@ -62,22 +68,25 @@ struct NotchRootView: View {
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }
 
-    /// Peek and tab content are stacked & always present (just opacity-toggled) so they
-    /// can share the *animated* `.frame(blobSize)` of the parent — the layout grows /
-    /// shrinks with the blob, so right-edge elements (dancing bars) never escape the
-    /// black silhouette during the open/close sweep.
+    /// `if/else` between the peek and the tab (instead of opacity-toggling both)
+    /// is what lets `matchedGeometryEffect` morph the album art and bars between
+    /// their two layouts during the open/close sweep — when both views were
+    /// always in the tree, matched geometry had nothing to interpolate between
+    /// and we got the cross-fade teleport.
     @ViewBuilder private var content: some View {
         ZStack {
-            CollapsedPeek()
-                .opacity(notch.isOpen || notch.toast != nil ? 0 : 1)
-
-            tabContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.horizontal, 22)
-                .padding(.top, 10)
-                .padding(.bottom, 10)
-                .foregroundStyle(.white)
-                .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
+            if notch.toast == nil {
+                if notch.isOpen {
+                    tabContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.horizontal, 22)
+                        .padding(.top, 10)
+                        .padding(.bottom, 10)
+                        .foregroundStyle(.white)
+                } else {
+                    CollapsedPeek(namespace: chromeNS)
+                }
+            }
 
             if let toast = notch.toast {
                 ScreenshotToastView(toast: toast)
@@ -101,7 +110,7 @@ struct NotchRootView: View {
 
     @ViewBuilder private var tabContent: some View {
         switch notch.tab {
-        case .music:       MusicTabView()
+        case .music:       MusicTabView(namespace: chromeNS)
         case .screenshots: ScreenshotTabView()
         }
     }
@@ -155,10 +164,12 @@ private struct SettingsGearButton: View {
 }
 
 /// What's visible when the notch is collapsed — album art on the left, dancing bars
-/// on the right. Padding/anchoring match the music tab's bars exactly so the cross-fade
-/// between "peek" and "tab" lands the bars on the same pixel — they look like one
-/// element staying put while the rest of the tab fades in around them.
+/// on the right. The artwork and bars are tagged with `matchedGeometryEffect`
+/// against the music tab's matching elements (same ids in the shared namespace),
+/// so SwiftUI morphs their size and position when the notch opens/closes rather
+/// than cross-fading two separate copies.
 private struct CollapsedPeek: View {
+    let namespace: Namespace.ID
     @EnvironmentObject private var music: NowPlayingManager
 
     /// Show whenever there's *any* track loaded; we just freeze the bars when paused
@@ -174,11 +185,13 @@ private struct CollapsedPeek: View {
                 .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .strokeBorder(.white.opacity(0.12)))
+                .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
             DancingBars(color: music.displayAccent,
                         isPlaying: music.info.isPlaying)
                 .frame(width: 20, height: 14)
+                .matchedGeometryEffect(id: "chromeBars", in: namespace)
         }
         .padding(.horizontal, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
