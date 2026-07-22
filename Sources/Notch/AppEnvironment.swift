@@ -11,10 +11,31 @@ final class AppEnvironment: ObservableObject {
     let settings = SettingsStore()
 
     private var cancellables = Set<AnyCancellable>()
+    /// Pending delayed audio-meter teardown after playback pauses.
+    private var meterStopWork: DispatchWorkItem?
 
     func start() {
         music.start()
-        audioMeter.start()
+        // Run the system-audio tap only while something is actually playing —
+        // the tap + realtime IO thread + 60 Hz UI publish are the app's main
+        // idle CPU/battery cost, and the bars freeze when paused anyway. The
+        // 2 s debounce on the stop side keeps track-skips and brief pauses
+        // from churning the CoreAudio device setup.
+        music.$info
+            .map(\.isPlaying)
+            .removeDuplicates()
+            .sink { [weak self] playing in
+                guard let self else { return }
+                self.meterStopWork?.cancel(); self.meterStopWork = nil
+                if playing {
+                    self.audioMeter.start()
+                } else {
+                    let work = DispatchWorkItem { [weak self] in self?.audioMeter.stop() }
+                    self.meterStopWork = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+                }
+            }
+            .store(in: &cancellables)
         ScreenshotWatcher.disableSystemFloatingThumbnail()
         screenshots.onNewScreenshot = { [weak self] url in
             guard let self else { return }

@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboarding: OnboardingWindowController?
     private var cancellables = Set<AnyCancellable>()
     private var hoverTimer: Timer?
+    private var hoverGlobalMonitor: Any?
+    private var hoverLocalMonitor: Any?
     private var overlayTimer: Timer?
     /// Pending "drop the window after the retract animation" — cancelled if the
     /// overlay closes again before it fires.
@@ -98,10 +100,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Open / close the notch based on whether the cursor is over the *visible* blob
-    /// (the small pill when collapsed, the whole panel when open). Polled so it's stable
-    /// regardless of which app is active or whether the panel ignores mouse events.
+    /// (the small pill when collapsed, the whole panel when open). Driven by mouse-move
+    /// events (global + local monitors, so it works regardless of which app is active)
+    /// instead of a fast poll — a stationary cursor costs nothing. A slow safety timer
+    /// covers the cases where the blob changes under a stationary cursor (toast expiry,
+    /// open/close animations).
     private func installHoverWatcher() {
-        let t = Timer(timeInterval: 0.06, repeats: true) { [weak self] _ in self?.evaluateHover() }
+        // Monitor handlers are delivered on the main thread but the closures are
+        // typed nonisolated — assumeIsolated instead of Task so the local monitor
+        // can return its event synchronously.
+        hoverGlobalMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged]
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.evaluateHover() }
+        }
+        hoverLocalMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged]
+        ) { [weak self] event in
+            MainActor.assumeIsolated { self?.evaluateHover() }
+            return event
+        }
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.evaluateHover() }
         RunLoop.main.add(t, forMode: .common)
         hoverTimer = t
     }
@@ -137,7 +156,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// overlays — the user's previous app stays the "active" application for menu
     /// bar / keyboard purposes — so direct observation is the only reliable signal.)
     private func installSystemOverlayWatcher() {
-        let t = Timer(timeInterval: 0.15, repeats: true) { [weak self] _ in
+        // 0.4 s is deliberately slow — each evaluation is a CGWindowListCopyWindowInfo
+        // IPC round-trip to WindowServer, and the occlusion-state watcher below fires
+        // an extra evaluation the instant an overlay actually starts, so this poll is
+        // mostly a recovery path for the overlay *closing*.
+        let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
             self?.evaluateSystemOverlay()
         }
         RunLoop.main.add(t, forMode: .common)

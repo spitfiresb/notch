@@ -267,7 +267,9 @@ struct DancingBars: View {
             .animation(.easeOut(duration: 0.07), value: meter.bars)
         } else {
             // Fallback: synthesized wiggle so playing-without-permission still feels alive.
-            TimelineView(.animation) { context in
+            // Capped at 30 fps — `.animation` uncapped runs at display refresh
+            // (120 Hz on ProMotion) for a wiggle nobody can see that fast.
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 HStack(alignment: .center, spacing: Self.spacing) {
                     ForEach(0..<Self.count, id: \.self) { i in
