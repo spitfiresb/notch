@@ -236,11 +236,16 @@ final class AudioMeter: ObservableObject {
     private func tick() {
         let rms = snapshot.load()
         var out = bars
+        var changed = false
         for i in 0..<Self.bandCount {
             env[i] = follow(env: env[i], target: shape(rms[i], band: i), band: i)
+            // Only publish when a bar has moved visibly — an unconditional
+            // assign fires objectWillChange 60×/s even in silence, keeping
+            // SwiftUI re-rendering the whole notch for no visible motion.
+            if abs(env[i] - out[i]) > 0.004 { changed = true }
             out[i] = env[i]
         }
-        bars = out
+        if changed { bars = out }
     }
 
     // Per-band dB windows, tilted so the natural bass-heaviness of music doesn't pin
