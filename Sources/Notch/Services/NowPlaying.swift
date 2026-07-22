@@ -46,7 +46,20 @@ final class NowPlayingManager: ObservableObject {
 
     func start() {
         mr.registerForNotifications { [weak self] in self?.refresh() }
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+        // Spotify announces every play/pause/track change via a distributed
+        // notification, so we refresh on events instead of a fast poll. Each
+        // refresh on the Spotify-fallback path is a *synchronous* AppleScript
+        // → Apple Events round-trip on the main thread (~40 ms); at the old
+        // 3 s poll that was a steady ~3% CPU. The slow poll below is only a
+        // recovery net (missed notification, scrubber drift).
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.spotify.client.PlaybackStateChanged"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
         refresh()
