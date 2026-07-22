@@ -18,8 +18,7 @@ struct MusicTabView: View {
             HStack(spacing: 9) {
                 artwork
                     .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(0.12)))
+                    .clipShape(Rectangle())
                     .matchedGeometryEffect(id: "chromeArt", in: namespace)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -70,24 +69,22 @@ struct MusicTabView: View {
         .animation(Self.trackFade, value: music.displayAccent)
     }
 
-    /// Album art is bound to `displayKey` so SwiftUI treats a track change as a
-    /// view replacement — `.transition(.opacity)` then gives us a cross-fade
-    /// between the old and new artwork instead of an instant swap.
+    /// Plain content for the artwork slot — no `.id`/`.transition` here because
+    /// that pair runs its own opacity fade when this view is inserted, which
+    /// conflicts with the matched-geometry morph during the open transition.
+    /// Also no `.aspectRatio` — album art is square in practice and the layout
+    /// constraint fought with matched-geometry's frame interpolation.
     @ViewBuilder private var artwork: some View {
-        Group {
-            if let image = music.displayArt {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                ZStack {
-                    Color.white.opacity(0.08)
-                    Image(systemName: "music.note")
-                        .font(.system(size: 15))
-                        .foregroundStyle(.white.opacity(0.4))
-                }
+        if let image = music.displayArt {
+            Image(nsImage: image).resizable()
+        } else {
+            ZStack {
+                Color.white.opacity(0.08)
+                Image(systemName: "music.note")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white.opacity(0.4))
             }
         }
-        .id(music.displayKey)
-        .transition(.opacity)
     }
 }
 

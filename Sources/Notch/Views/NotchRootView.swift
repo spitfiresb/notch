@@ -57,11 +57,19 @@ struct NotchRootView: View {
                 .clipShape(blobShape)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Trackpad-swipe hide: shift the contents up by up to one panel height.
-        // We do this here (not by moving the window) because the panel is
-        // `.stationary`, and WindowServer freezes window positions during a
-        // Spaces transition — the visible hide must be a render-time offset.
-        .offset(y: -notch.swipeOffset * ScreenMetrics.expandedSize.height)
+        // Hot-corner overlays (Mission Control / App Exposé): retract the blob up
+        // past the window's top edge — the fixed-size window clips it, so it
+        // reads as sliding into the bezel. Visible only because the overlay CGS
+        // space sits above the Mission Control transition layer. On exit the
+        // window comes back with the content still retracted and the spring
+        // drops it down. dampingFraction must be 1.0: any underdamped spring
+        // overshoots *below* rest, revealing a sliver of screen above the blob's
+        // flat top.
+        .offset(y: notch.isSystemOverlayActive ? -(blobSize.height + 24) : 0)
+        .animation(notch.isSystemOverlayActive
+                   ? .easeIn(duration: 0.26)
+                   : .spring(response: 0.40, dampingFraction: 1.0),
+                   value: notch.isSystemOverlayActive)
         .animation(transitionAnim, value: notch.isOpen)
         .animation(Self.openAnim, value: notch.tab)
         .animation(transitionAnim, value: notch.toast)
@@ -75,18 +83,24 @@ struct NotchRootView: View {
     /// and we got the cross-fade teleport.
     @ViewBuilder private var content: some View {
         ZStack {
-            if notch.toast == nil {
-                if notch.isOpen {
-                    tabContent
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.horizontal, 22)
-                        .padding(.top, 10)
-                        .padding(.bottom, 10)
-                        .foregroundStyle(.white)
-                } else {
-                    CollapsedPeek(namespace: chromeNS)
+            // The `.animation(_:value:)` here is what drives the matched-geometry
+            // morph during the open/close sweep — the parent-level animation
+            // didn't always propagate into the if/else view-tree change.
+            Group {
+                if notch.toast == nil {
+                    if notch.isOpen {
+                        tabContent
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.horizontal, 22)
+                            .padding(.top, 10)
+                            .padding(.bottom, 10)
+                            .foregroundStyle(.white)
+                    } else {
+                        CollapsedPeek(namespace: chromeNS)
+                    }
                 }
             }
+            .animation(transitionAnim, value: notch.isOpen)
 
             if let toast = notch.toast {
                 ScreenshotToastView(toast: toast)
@@ -182,9 +196,7 @@ private struct CollapsedPeek: View {
         HStack(spacing: 0) {
             artwork
                 .frame(width: 14, height: 14)
-                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(.white.opacity(0.12)))
+                .clipShape(Rectangle())
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
@@ -201,15 +213,19 @@ private struct CollapsedPeek: View {
     }
 
     @ViewBuilder private var artwork: some View {
-        Group {
-            if let image = music.displayArt {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                Color.clear
-            }
+        // No `.id`/`.transition` here — that pair runs its own opacity fade-in
+        // when the artwork view is inserted (which happens at the same moment
+        // as the matched-geometry morph), and the two animations were fighting
+        // each other and reading as a snap-then-settle.
+        // Also no `.aspectRatio` constraint — `Image` with an aspect-ratio
+        // layout fights matched-geometry's frame interpolation, so we let the
+        // image stretch to whatever frame matched is currently morphing through.
+        // Album art is square in practice so the visual is unchanged.
+        if let image = music.displayArt {
+            Image(nsImage: image).resizable()
+        } else {
+            Color.clear
         }
-        .id(music.displayKey)
-        .transition(.opacity)
     }
 }
 

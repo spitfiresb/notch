@@ -97,8 +97,10 @@ final class NotchPanel: NSPanel {
                    backing: .buffered, defer: false)
 
         isFloatingPanel = true
-        // Just below the cursor window level — high enough that WindowServer's
-        // full-screen transition compositor won't draw over us.
+        // Just below the cursor window level. Tested 2026-07-22: window level has
+        // no bearing on the Spaces-transition blank-out (the menu-bar band at 25
+        // occludes identically), so this is purely about drawing over the menu
+        // bar and over full-screen apps.
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.cursorWindow)) - 1)
         // We intentionally don't use `.fullScreenAuxiliary`. WindowServer occludes
         // auxiliary windows the moment it detects a 3-finger gesture inside a

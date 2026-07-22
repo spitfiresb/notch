@@ -63,12 +63,6 @@ final class NotchState: ObservableObject {
     /// screen. The panel is fully hidden then so it doesn't cover the system overlay.
     @Published var isSystemOverlayActive: Bool = false
 
-    /// 0…1 vertical hide progress for the notch contents, driven by the trackpad
-    /// swipe handler. Rendered as a content offset (not a window move) because the
-    /// window has `.stationary` collection behavior — WindowServer pins its
-    /// rendered frame during a Spaces transition and ignores live setFrame calls.
-    @Published var swipeOffset: CGFloat = 0
-
     /// While set & in the future, the hover-watcher won't auto-collapse.
     private(set) var pinnedUntil: Date?
     var isPinnedOpen: Bool { (pinnedUntil ?? .distantPast) > Date() }

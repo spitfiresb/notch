@@ -13,22 +13,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var hoverTimer: Timer?
     private var overlayTimer: Timer?
-    /// Timestamp of the most recent trackpad-driven swipe end. The space-change
-    /// notification arrives around the same time; if we just animated via the
-    /// trackpad handler we don't want to fire the public-API slide on top of it.
-    private var trackpadSwipeEndedAt: Date?
+    /// Pending "drop the window after the retract animation" — cancelled if the
+    /// overlay closes again before it fires.
+    private var overlayHideWork: DispatchWorkItem?
     /// True while the user has 3+ fingers down on the trackpad. Used to suppress
-    /// the space-change and dock-overlay handlers so they don't fight the live
-    /// drag (the system commits the space mid-swipe, before the user lifts).
+    /// the dock-overlay handler — a Spaces swipe briefly produces a Dock-owned
+    /// window that trips the Mission Control heuristic, and reacting to it would
+    /// yank the panel off screen mid-gesture.
     private var trackpadGestureActive = false
-    /// True once the pre-emptive hide animation has fired for the current
-    /// gesture. We only kick it off once per gesture, not on every frame.
-    private var trackpadHideAnimationStarted = false
-    /// On gesture end, if the panel is currently occluded by WindowServer (the
-    /// full-screen-Space gesture path) we defer the settle animation until
-    /// occlusion lifts — otherwise the easeOut runs invisibly and the user
-    /// sees the notch "pop" into its base position on the new Space.
-    private var pendingOcclusionSettle = false
+
+    func applicationWillTerminate(_ notification: Notification) {
+        SpaceAttacher.detach()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -58,12 +54,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .dropFirst()
             .removeDuplicates()
             .sink { [weak self, weak panel] active in
-                guard let panel else { return }
+                guard let self, let panel else { return }
+                self.overlayHideWork?.cancel()
+                self.overlayHideWork = nil
                 if active {
-                    self?.env.notch.close()
-                    panel.orderOut(nil)
+                    self.env.notch.close()
+                    // The root view retracts the blob up past the top edge; drop
+                    // the window only after that plays out. (This is only visible
+                    // because the overlay space sits at absolute level 400 —
+                    // at level 0 WindowServer blanks us during the Mission
+                    // Control build-in and the retract read as a glitchy
+                    // disappear-reappear.)
+                    let work = DispatchWorkItem { [weak panel] in panel?.orderOut(nil) }
+                    self.overlayHideWork = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.32, execute: work)
                 } else {
-                    self?.slidePanelDown()
+                    // Content is still retracted (offset above the top edge), so
+                    // showing the window is invisible; the state flip then springs
+                    // the blob back down purely in SwiftUI — the window frame
+                    // never animates, which is what made the old return janky.
+                    panel.reposition()
+                    panel.orderFrontRegardless()
+                    SpaceAttacher.attachToAllSpaces(panel)
                 }
             }
             .store(in: &cancellables)
@@ -144,47 +156,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Bring the panel back on screen after a hot-corner overlay closes. Starts the
-    /// window just above the screen edge and animates its frame down so the notch
-    /// pill drops in instead of popping in place.
-    private func slidePanelDown() {
-        guard let panel, let screen = ScreenMetrics.screen else { return }
-        let sf = screen.frame
-        let size = ScreenMetrics.expandedSize
-        let x = (sf.minX + sf.maxX) / 2 - size.width / 2
-        let startFrame = NSRect(x: x, y: sf.maxY, width: size.width, height: size.height)
-        let endFrame = NSRect(x: x, y: sf.maxY - size.height, width: size.width, height: size.height)
-        panel.setFrame(startFrame, display: false)
-        panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.32
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
-            panel.animator().setFrame(endFrame, display: true)
-        }
-    }
 
-    /// Animate the panel up off the screen edge. Used when the system is starting
-    /// some screen-wide transition (currently: a Spaces swipe) so the pill gets out
-    /// of the way before sliding back down.
-    private func slidePanelUp(then completion: (() -> Void)? = nil) {
-        guard let panel, let screen = ScreenMetrics.screen else {
-            completion?()
-            return
-        }
-        let sf = screen.frame
-        let curr = panel.frame
-        let upFrame = NSRect(x: curr.origin.x, y: sf.maxY,
-                             width: curr.width, height: curr.height)
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.20
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            panel.animator().setFrame(upFrame, display: true)
-        }, completionHandler: completion)
-    }
-
-    /// Three-finger swipe between Spaces (or any other space change). `activeSpaceDidChange`
-    /// fires as the new space slides in, so we slide the notch up out of the way and
-    /// drop it back down once the swipe has settled.
+    /// A Space change doesn't move the notch — it stays pinned in place. All we
+    /// do is re-attach it to the (possibly brand-new) set of Spaces.
     private func installSpaceChangeWatcher() {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
@@ -199,112 +173,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Re-attach to all spaces — entering full-screen creates a brand-new
         // Space, and a window only pinned to the previous set won't be on it.
         if let panel { SpaceAttacher.attachToAllSpaces(panel) }
-
-        // If a trackpad swipe ended in an occluded state, the slide-down was
-        // deferred. The new space is now active and (after a small grace
-        // period for any residual occlusion flickering to settle) the user
-        // will actually see the easeOut.
-        if pendingOcclusionSettle {
-            pendingOcclusionSettle = false
-            notchLog("[notch.sw] handleSpaceChange firing pending settle")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-                self?.animateSettleDown()
-            }
-        }
-
-        // Don't fight the Mission Control / Launchpad handler.
-        guard !env.notch.isSystemOverlayActive else { return }
-        // Trackpad monitor owns the animation while a gesture is in flight,
-        // and for a short window after, so the public-API slide doesn't pile on.
-        if trackpadGestureActive { return }
-        if let t = trackpadSwipeEndedAt, Date().timeIntervalSince(t) < 0.8 { return }
-        env.notch.close()
-        slidePanelUp { [weak self] in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                self?.slidePanelDown()
-            }
-        }
     }
 
-    /// Real-time three-finger swipe tracking via MultitouchSupport. While the
-    /// user is dragging across the trackpad, position the panel proportionally
-    /// to swipe magnitude; when fingers lift, animate the panel back to rest.
-    /// Log occlusion changes for diagnostics, but don't act on them — the
-    /// system flips occlusion several times per full-screen swipe sequence,
-    /// so triggering settle here would race with the next re-occlusion and
-    /// make the slide-down "sometimes work." We fire the settle on
-    /// `activeSpaceDidChange` instead (in handleSpaceChange).
+    /// WindowServer occludes the panel during full-screen-Space transitions and
+    /// the instant a hot-corner overlay (Mission Control / App Exposé) starts.
+    /// That occlusion event fires ~120ms before the 0.15s overlay poll would
+    /// notice, so we also re-evaluate the overlay right here — it's what lets the
+    /// window be dropped during the compositor blink instead of popping back in
+    /// over Mission Control for a beat.
     private func installPanelVisibilityWatcher() {
         guard let panel else { return }
         NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification,
             object: panel,
             queue: .main
-        ) { [weak panel] _ in
+        ) { [weak self, weak panel] _ in
             guard let panel else { return }
             notchLog("[notch.pn] occlusion visible=\(panel.occlusionState.contains(.visible)) raw=\(panel.occlusionState.rawValue)")
+            self?.evaluateSystemOverlay()
         }
     }
 
+    /// The monitor no longer drives any hide animation — we only track whether a
+    /// gesture is in flight so `evaluateSystemOverlay` stands down while the
+    /// system shuffles windows around mid-swipe.
     private func installTrackpadMonitor() {
         let monitor = TrackpadGestureMonitor.shared
-        monitor.onUpdate = { [weak self] dx, dy in
-            self?.trackpadGestureActive = true
-            self?.handleTrackpadSwipe(dx: dx, dy: dy)
-        }
-        monitor.onEnd = { [weak self] in
-            self?.trackpadGestureActive = false
-            self?.handleTrackpadSwipeEnd()
-        }
+        monitor.onUpdate = { [weak self] _, _ in self?.trackpadGestureActive = true }
+        monitor.onEnd = { [weak self] in self?.trackpadGestureActive = false }
         monitor.start()
-    }
-
-    private func handleTrackpadSwipe(dx: CGFloat, dy: CGFloat) {
-        guard !env.notch.isSystemOverlayActive else { return }
-
-        let absDx = abs(dx)
-        let absDy = abs(dy)
-        // Only react to horizontal-dominant swipes — vertical 3-finger gestures
-        // are Mission Control, handled separately by the overlay watcher.
-        guard absDx > 0.05, absDx > absDy * 1.3 else { return }
-
-        // New gesture motion cancels any in-flight deferred settle.
-        pendingOcclusionSettle = false
-
-        // 40% of trackpad travel = fully hidden. Anything more is clamped. We
-        // set the offset live (no animation wrapper) so SwiftUI snaps to each
-        // value — this gives a finger-proportional drag while WindowServer is
-        // still compositing us. Once the system occludes the panel (only
-        // inside full-screen Spaces, ~270 ms after fingers land), no public or
-        // private API lets us render through; live updates just won't show.
-        let progress = min(1.0, absDx / 0.40)
-        env.notch.swipeOffset = progress
-    }
-
-    private func handleTrackpadSwipeEnd() {
-        trackpadSwipeEndedAt = Date()
-        trackpadHideAnimationStarted = false
-        let isOccluded = !(panel?.occlusionState.contains(.visible) ?? true)
-        notchLog("[notch.sw] END off=\(String(format: "%.2f", Double(env.notch.swipeOffset))) occluded=\(isOccluded)")
-        if isOccluded {
-            // Wait for occlusion to lift (handled by the panel-visibility
-            // watcher) before animating. Belt-and-suspenders timeout too.
-            pendingOcclusionSettle = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self, self.pendingOcclusionSettle else { return }
-                self.pendingOcclusionSettle = false
-                self.animateSettleDown()
-            }
-        } else {
-            animateSettleDown()
-        }
-    }
-
-    private func animateSettleDown() {
-        notchLog("[notch.sw] animateSettleDown from \(String(format: "%.2f", Double(env.notch.swipeOffset)))")
-        withAnimation(.easeOut(duration: 0.32)) {
-            env.notch.swipeOffset = 0
-        }
     }
 
     /// `true` when Mission Control / App Exposé / Launchpad is on screen. Detected
