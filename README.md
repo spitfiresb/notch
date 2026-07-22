@@ -44,6 +44,10 @@ Hover the notch and it blooms into a music player. Take a screenshot and it pops
 - **Now Playing, from anywhere** — reads the system's Now Playing data (the same source Control Center uses), with a Spotify Apple-Events fallback for macOS versions that lock MediaRemote down. Play/pause, skip, and seek from the notch.
 - **Real audio visualization** — a CoreAudio process tap feeds six log-spaced bandpass filters (80 Hz → 7 kHz); each bar is a real frequency band with its own attack/release envelope. Not a canned animation.
 - **Screenshots tab** — watches for new screenshots, pops a toast, optionally copies them straight to the clipboard and routes them into a tidy folder. Swipe horizontally on the trackpad to switch tabs.
+
+  ![Screenshot toast and screenshots tab](docs/assets/screenshot-demo.gif)
+
+  *Take a screenshot → the notch pops a "copied to clipboard" toast; hover it to reveal the recent-screenshots strip.*
 - **Stays out of the way** — no Dock icon, no menu bar item. It pins itself across every Space (including full-screen apps) and ducks off-screen when Mission Control or App Exposé takes over.
 
 ## Why it's interesting under the hood
