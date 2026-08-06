@@ -89,9 +89,15 @@ final class NotchState: ObservableObject {
     var isPinnedOpen: Bool { (pinnedUntil ?? .distantPast) > Date() }
 
     private var closeWork: DispatchWorkItem?
+    private var tabRevertWork: DispatchWorkItem?
+
+    /// How long a non-default tab survives after the notch collapses before we
+    /// snap back to the music tab.
+    private static let tabRevertDelay: TimeInterval = 30
 
     func open(tab newTab: Tab? = nil) {
         closeWork?.cancel(); closeWork = nil
+        tabRevertWork?.cancel(); tabRevertWork = nil
         pinnedUntil = nil
         toast = nil
         if let newTab { tab = newTab }
@@ -103,6 +109,21 @@ final class NotchState: ObservableObject {
         pinnedUntil = nil
         toast = nil
         isOpen = false
+        scheduleTabRevert()
+    }
+
+    /// The tab you were on sticks after the notch collapses — re-hovering within
+    /// `tabRevertDelay` brings you back to it. Past that, revert to music.
+    private func scheduleTabRevert() {
+        tabRevertWork?.cancel(); tabRevertWork = nil
+        guard tab != .music else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.tabRevertWork = nil
+            if !self.isOpen { self.tab = .music }
+        }
+        tabRevertWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.tabRevertDelay, execute: work)
     }
 
     func dismissToast() { toast = nil }
