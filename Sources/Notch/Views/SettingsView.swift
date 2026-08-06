@@ -8,6 +8,18 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
+                Toggle(isOn: $settings.launchAtLogin) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Launch at login")
+                        Text("Keeps Notch running across restarts and shutdowns.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("General")
+            }
+            Section {
                 Toggle(isOn: $settings.routeScreenshotsToFolder) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Save screenshots to a Screenshots folder")
@@ -29,6 +41,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 260)
+        .frame(width: 480, height: 330)
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import ServiceManagement
 
 /// User-configurable feature toggles. Backed by `UserDefaults` for app-local
 /// preferences and by the system `com.apple.screencapture` domain for settings
@@ -18,8 +19,16 @@ final class SettingsStore: ObservableObject {
         didSet { Self.applyScreenshotRouting(enabled: routeScreenshotsToFolder) }
     }
 
+    /// Register the app as a login item so it comes back after restarts and
+    /// shutdowns. Mirrors `SMAppService.mainApp` — the system is the source of
+    /// truth, UserDefaults just remembers whether we've done the initial opt-in.
+    @Published var launchAtLogin: Bool {
+        didSet { Self.applyLaunchAtLogin(enabled: launchAtLogin) }
+    }
+
     private enum Keys {
         static let copyScreenshot = "settings.copyScreenshotToClipboard"
+        static let launchAtLoginSeeded = "settings.launchAtLogin.seeded"
     }
 
     /// The managed folder we point macOS at when routing is enabled.
@@ -37,6 +46,32 @@ final class SettingsStore: ObservableObject {
         // Routing reflects the live system pref — the user (or this app) may have
         // already pointed `screencapture` somewhere; mirror reality, don't overwrite it.
         routeScreenshotsToFolder = Self.detectScreenshotRouting()
+        // First launch: opt in to launch-at-login once so the app survives
+        // restarts out of the box. After that, mirror the system's status so a
+        // user who removed us in System Settings isn't silently re-added.
+        if defaults.bool(forKey: Keys.launchAtLoginSeeded) {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        } else {
+            defaults.set(true, forKey: Keys.launchAtLoginSeeded)
+            launchAtLogin = true
+            Self.applyLaunchAtLogin(enabled: true)
+        }
+    }
+
+    private static func applyLaunchAtLogin(enabled: Bool) {
+        do {
+            if enabled {
+                if SMAppService.mainApp.status != .enabled {
+                    try SMAppService.mainApp.register()
+                }
+            } else {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                }
+            }
+        } catch {
+            notchLog("launch-at-login \(enabled ? "register" : "unregister") failed: \(error)")
+        }
     }
 
     /// True when `com.apple.screencapture.location` is already our managed path.
