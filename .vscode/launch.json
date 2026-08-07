@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:notch}",
+            "name": "Debug Notch",
+            "target": "Notch",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Notch"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:notch}",
+            "name": "Release Notch",
+            "target": "Notch",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Notch"
+        }
+    ]
+}
