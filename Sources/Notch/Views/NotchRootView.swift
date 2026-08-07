@@ -20,7 +20,10 @@ struct NotchRootView: View {
 
     private var blobSize: CGSize {
         if notch.toast != nil { return ScreenMetrics.toastSize }
-        return notch.isOpen ? ScreenMetrics.expandedSize : ScreenMetrics.notchSize
+        guard notch.isOpen else { return ScreenMetrics.notchSize }
+        return notch.tab == .music && notch.musicPanelExpanded
+            ? ScreenMetrics.expandedMusicSize
+            : ScreenMetrics.expandedSize
     }
     private var bottomRadius: CGFloat {
         if notch.toast != nil { return 16 }
@@ -72,6 +75,7 @@ struct NotchRootView: View {
                    value: notch.isSystemOverlayActive)
         .animation(transitionAnim, value: notch.isOpen)
         .animation(Self.openAnim, value: notch.tab)
+        .animation(Self.openAnim, value: notch.musicPanelExpanded)
         .animation(transitionAnim, value: notch.toast)
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }

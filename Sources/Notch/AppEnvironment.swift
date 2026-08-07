@@ -86,8 +86,13 @@ final class NotchState: ObservableObject {
     }
 
     @Published var isOpen = false
-    @Published var tab: Tab = .music
+    @Published var tab: Tab = .music {
+        didSet { if tab != .music { musicPanelExpanded = false } }
+    }
     @Published var toast: ScreenshotToast?
+    /// Music tab's taller state — the "Saved in" playlist panel unfolded
+    /// beneath the transport controls.
+    @Published var musicPanelExpanded = false
 
     /// `true` while Mission Control / App Exposé / Launchpad / Show Desktop is on
     /// screen. The panel is fully hidden then so it doesn't cover the system overlay.
@@ -118,6 +123,7 @@ final class NotchState: ObservableObject {
         pinnedUntil = nil
         toast = nil
         isOpen = false
+        musicPanelExpanded = false
         scheduleTabRevert()
     }
 

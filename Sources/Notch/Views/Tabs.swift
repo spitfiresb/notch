@@ -9,10 +9,8 @@ struct MusicTabView: View {
     let namespace: Namespace.ID
     @EnvironmentObject private var music: NowPlayingManager
     @EnvironmentObject private var spotify: SpotifyLibrary
+    @EnvironmentObject private var notch: NotchState
     private var info: NowPlayingInfo { music.info }
-
-    /// Swap the scrubber+transport rows for the "Saved in" playlist list.
-    @State private var showSavedIn = false
 
     private static let trackFade: Animation = .easeInOut(duration: 0.34)
 
@@ -48,42 +46,44 @@ struct MusicTabView: View {
                 }
             }
 
-            if showSavedIn {
-                SavedInPanel(accent: music.displayAccent) {
-                    withAnimation(.easeOut(duration: 0.18)) { showSavedIn = false }
-                }
-                .transition(.opacity)
-            } else {
-                // Middle: elapsed · progress · remaining (draggable scrubber)
-                MusicProgressLine(info: info) { music.seek(to: $0) }
+            // Middle: elapsed · progress · remaining (draggable scrubber)
+            MusicProgressLine(info: info) { music.seek(to: $0) }
 
-                // Bottom: ⏮ ⏯ ⏭ centred, heart & saved-in at the edges
-                ZStack {
-                    HStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                        TransportButton(symbol: "backward.fill", size: 13, enabled: info.hasContent) { music.previous() }
-                        Spacer().frame(width: 26)
-                        PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
-                            music.togglePlayPause()
-                        }
-                        Spacer().frame(width: 26)
-                        TransportButton(symbol: "forward.fill", size: 13, enabled: info.hasContent) { music.next() }
-                        Spacer(minLength: 0)
+            // Bottom: ⏮ ⏯ ⏭ centred, save button at the left edge
+            ZStack {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    TransportButton(symbol: "backward.fill", size: 13, enabled: info.hasContent) { music.previous() }
+                    Spacer().frame(width: 26)
+                    PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
+                        music.togglePlayPause()
                     }
-                    HStack {
-                        SaveButton(enabled: spotifyActionsEnabled) {
-                            withAnimation(.easeOut(duration: 0.18)) { showSavedIn = true }
-                        }
-                        Spacer()
-                    }
+                    Spacer().frame(width: 26)
+                    TransportButton(symbol: "forward.fill", size: 13, enabled: info.hasContent) { music.next() }
+                    Spacer(minLength: 0)
                 }
+                HStack {
+                    SaveButton(enabled: spotifyActionsEnabled) {
+                        notch.musicPanelExpanded.toggle()
+                    }
+                    Spacer()
+                }
+            }
+            .frame(height: 30)
+
+            // The notch grows downward (NotchRootView sizes the blob off
+            // `musicPanelExpanded`) and the playlist panel fills the new space —
+            // the controls above never move.
+            if notch.musicPanelExpanded {
+                SavedInPanel(accent: music.displayAccent) {
+                    notch.musicPanelExpanded = false
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, 4)
                 .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Collapsing the notch removes this view — drop back to the transport
-        // layout so re-opening doesn't land on a stale playlist list.
-        .onDisappear { showSavedIn = false }
         // One fade applies to every track-driven change: art swap, title/artist
         // text cross-fade, and the dancing-bars accent colour interpolation.
         .animation(Self.trackFade, value: music.displayKey)
@@ -129,6 +129,8 @@ private struct SaveButton: View {
 
     @State private var hovering = false
     @State private var pressed = false
+    /// Incremented per like — each bump replays the confetti burst.
+    @State private var burst = 0
 
     static let spotifyGreen = Color(red: 0.12, green: 0.84, blue: 0.38)
 
@@ -142,6 +144,7 @@ private struct SaveButton: View {
             .contentTransition(.symbolEffect(.replace))
             .symbolEffect(.bounce, value: saved)
             .frame(width: size + 12, height: size + 8)
+            .overlay(ConfettiBurst(trigger: burst, color: Self.spotifyGreen))
             .contentShape(Rectangle())
             .scaleEffect(pressed ? 0.78 : (hovering ? 1.2 : 1))
             .animation(pressed ? .easeOut(duration: 0.12)
@@ -160,6 +163,7 @@ private struct SaveButton: View {
                         guard bounds.contains(v.location) else { return }
                         if spotify.state == .connected, !saved, spotify.membership.trackID != nil {
                             spotify.setLiked(true)   // ⊕ = save to Liked Songs
+                            burst += 1
                             Haptics.tick()
                         } else {
                             showList()
@@ -169,9 +173,57 @@ private struct SaveButton: View {
     }
 }
 
-/// Replaces the scrubber + transport rows: which of your playlists hold the
-/// current track (plus Liked Songs), or the connect / syncing states that
-/// precede having an answer.
+/// Spotify's like-burst: a ring of little green dots that shoot outward from
+/// the button and fade. Replays every time `trigger` changes. Driven by a
+/// TimelineView clock rather than `withAnimation` — a reset-then-animate on the
+/// same state in one update nets out to "no change" and never plays.
+private struct ConfettiBurst: View {
+    let trigger: Int
+    let color: Color
+
+    @State private var startedAt: Date?
+
+    private static let duration = 0.6
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: startedAt == nil)) { ctx in
+            let p: CGFloat = {
+                guard let s = startedAt else { return 1 }
+                return CGFloat(min(1, ctx.date.timeIntervalSince(s) / Self.duration))
+            }()
+            let eased = 1 - pow(1 - p, 3)   // ease-out: fast launch, gentle landing
+            ZStack {
+                ForEach(0..<16, id: \.self) { i in
+                    let angle = (Double(i) + 0.5) / 16 * 2 * .pi
+                    let radius: CGFloat = 13 + CGFloat((i * 7) % 3) * 3   // slight per-dot variance
+                    let dot: CGFloat = i.isMultiple(of: 2) ? 1.2 : 0.9
+                    Circle()
+                        .fill(color)
+                        .frame(width: dot, height: dot)
+                        .offset(x: cos(angle) * radius * eased,
+                                y: sin(angle) * radius * eased)
+                        // Solid for most of the flight, quick fade at the very end.
+                        .opacity(p < 0.75 ? 1 : Double(max(0, 1 - (p - 0.75) / 0.25)))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .onChange(of: trigger) { _, _ in
+            startedAt = Date()
+            // Pause the timeline once the burst has fully played out.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.duration + 0.1) {
+                if let s = startedAt, Date().timeIntervalSince(s) > Self.duration {
+                    startedAt = nil
+                }
+            }
+        }
+    }
+}
+
+/// The unfolded section under the transport controls: which playlists hold the
+/// current track (Liked Songs included) plus the rest of your playlists to add
+/// it to — Spotify's "Add to playlist" dialog, sans new-playlist. Also hosts
+/// the connect / error states that precede having an answer.
 private struct SavedInPanel: View {
     @EnvironmentObject private var spotify: SpotifyLibrary
     let accent: Color
@@ -233,21 +285,36 @@ private struct SavedInPanel: View {
                 statusLine(spotify.isSyncing ? "Syncing your playlists…"
                                              : "Not saved in any of your playlists.")
             } else {
+                let saved = spotify.membership.playlists
+                let others = spotify.allPlaylists.filter { p in !saved.contains(where: { $0.id == p.id }) }
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 4) {
-                        if spotify.membership.liked == true {
-                            SavedInRow(symbol: "heart.fill", name: "Liked Songs", accent: accent) {
-                                spotify.setLiked(false)
-                                Haptics.tick()
-                            }
+                        PlaylistToggleRow(art: .liked, name: "Liked Songs",
+                                          contained: spotify.membership.liked == true) {
+                            spotify.setLiked(!(spotify.membership.liked == true))
+                            Haptics.tick()
                         }
-                        ForEach(spotify.membership.playlists) { ref in
-                            SavedInRow(symbol: "music.note.list", name: ref.name, accent: accent) {
+                        ForEach(saved) { ref in
+                            PlaylistToggleRow(art: .cover(ref.image), name: ref.name, contained: true) {
                                 spotify.removeFromPlaylist(ref)
                                 Haptics.tick()
                             }
                         }
+                        if !others.isEmpty {
+                            Text("ADD TO")
+                                .font(.system(size: 8, weight: .bold))
+                                .kerning(0.8)
+                                .foregroundStyle(.white.opacity(0.35))
+                                .padding(.top, 6)
+                            ForEach(others) { ref in
+                                PlaylistToggleRow(art: .cover(ref.image), name: ref.name, contained: false) {
+                                    spotify.addToPlaylist(ref)
+                                    Haptics.tick()
+                                }
+                            }
+                        }
                     }
+                    .padding(.bottom, 4)
                 }
             }
         }
@@ -261,38 +328,77 @@ private struct SavedInPanel: View {
     }
 }
 
-/// One "Saved in" entry. The trailing green check flips to a remove (⊖) on
-/// hover — clicking it takes the track out of that playlist (or Liked Songs),
-/// mirroring Spotify's own toggle rows.
-private struct SavedInRow: View {
-    let symbol: String
+/// One playlist entry, Spotify-dialog style: cover art, name, and a trailing
+/// indicator. Contained rows carry the green check (hover flips it to a red ⊖ =
+/// remove); the rest show an empty circle that fills in when clicked (= add).
+/// The whole row is the hit target.
+private struct PlaylistToggleRow: View {
+    enum Art { case liked, cover(String?) }
+
+    let art: Art
     let name: String
-    let accent: Color
-    let onRemove: () -> Void
+    let contained: Bool
+    let onToggle: () -> Void
 
     @State private var hovering = false
 
+    private static let artSize: CGFloat = 22
+
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 8.5))
-                .foregroundStyle(accent)
-                .frame(width: 12)
+        HStack(spacing: 8) {
+            artwork
+                .frame(width: Self.artSize, height: Self.artSize)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
             Text(name)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(contained || hovering ? 1 : 0.7))
                 .lineLimit(1)
             Spacer(minLength: 0)
-            Image(systemName: hovering ? "minus.circle.fill" : "checkmark.circle.fill")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(hovering ? Color(red: 1.0, green: 0.36, blue: 0.34)
-                                          : SaveButton.spotifyGreen)
+            Image(systemName: contained ? (hovering ? "minus.circle.fill" : "checkmark.circle.fill")
+                                        : "circle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(contained
+                                 ? (hovering ? Color(red: 1.0, green: 0.36, blue: 0.34)
+                                             : SaveButton.spotifyGreen)
+                                 : .white.opacity(hovering ? 0.9 : 0.35))
                 .contentTransition(.symbolEffect(.replace))
         }
+        .padding(.vertical, 1)
         .contentShape(Rectangle())
         .onHover { h in
             withAnimation(.easeOut(duration: 0.12)) { hovering = h }
         }
-        .onTapGesture { if hovering { onRemove() } }
+        .onTapGesture(perform: onToggle)
+    }
+
+    @ViewBuilder private var artwork: some View {
+        switch art {
+        case .liked:
+            // Spotify's Liked Songs tile: heart on a violet gradient.
+            ZStack {
+                LinearGradient(colors: [Color(red: 0.27, green: 0.16, blue: 0.87),
+                                        Color(red: 0.75, green: 0.83, blue: 0.92)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white)
+            }
+        case .cover(let urlString):
+            if let urlString, let url = URL(string: urlString) {
+                AsyncImage(url: url) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Color.white.opacity(0.08)
+                }
+            } else {
+                ZStack {
+                    Color.white.opacity(0.08)
+                    Image(systemName: "music.note.list")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
+        }
     }
 }
 

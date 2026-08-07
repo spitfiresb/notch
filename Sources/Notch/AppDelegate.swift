@@ -130,13 +130,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let panel else { return }
         let notch = env.notch
         if notch.isSystemOverlayActive { return }
+        // The window is always the tallest (music-expanded) size; the visible
+        // blob may be smaller, so hover-tracking follows the blob, not the frame.
         let wf = panel.frame
-        let blobRect: NSRect = notch.isOpen
-            ? wf
-            : NSRect(x: wf.midX - ScreenMetrics.notchSize.width / 2,
-                     y: wf.maxY - ScreenMetrics.notchSize.height,
-                     width: ScreenMetrics.notchSize.width,
-                     height: ScreenMetrics.notchSize.height)
+        let blobSize: CGSize = notch.isOpen
+            ? (notch.tab == .music && notch.musicPanelExpanded
+               ? ScreenMetrics.expandedMusicSize
+               : ScreenMetrics.expandedSize)
+            : ScreenMetrics.notchSize
+        let blobRect = NSRect(x: wf.midX - blobSize.width / 2,
+                              y: wf.maxY - blobSize.height,
+                              width: blobSize.width,
+                              height: blobSize.height)
 
         if blobRect.contains(NSEvent.mouseLocation) {
             notch.cancelScheduledClose()

@@ -27,6 +27,7 @@ final class SpotifyLibrary: ObservableObject {
     struct PlaylistRef: Equatable, Identifiable {
         let id: String
         let name: String
+        let image: String?      // smallest cover-art URL Spotify offers
     }
 
     /// What we know about the current track's place in the user's library.
@@ -45,11 +46,18 @@ final class SpotifyLibrary: ObservableObject {
     @Published private(set) var lastSync: Date?
     @Published private(set) var playlistCount = 0
     @Published private(set) var membership = Membership()
+    /// Every writable playlist, index order (roughly most-recent-first from Spotify).
+    @Published private(set) var allPlaylists: [PlaylistRef] = []
 
     private struct PlaylistEntry: Codable {
         let id: String
         let name: String
         let snapshot: String
+        let image: String?
+        /// When we last saw this playlist change (snapshot flip or our own
+        /// write) — the API has no real modified-date, so this proxy drives the
+        /// "recently updated" ordering and gets truer over time.
+        var updatedAt: Date?
         var trackIDs: [String]
     }
     private struct CacheFile: Codable {
@@ -232,40 +240,53 @@ final class SpotifyLibrary: ObservableObject {
     /// Remove the current track from one of the user's playlists. Optimistic,
     /// with the row restored if the write fails.
     func removeFromPlaylist(_ playlist: PlaylistRef) {
-        guard state == .connected, let id = membership.trackID,
-              let idx = cache.playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
-        cache.playlists[idx].trackIDs.removeAll { $0 == id }
-        rebuildLookup()
-        saveCache()
-        if membership.trackID == id { membership.playlists.removeAll { $0.id == playlist.id } }
+        writePlaylistMembership(playlist, present: false)
+    }
+
+    /// Add the current track to one of the user's playlists.
+    func addToPlaylist(_ playlist: PlaylistRef) {
+        writePlaylistMembership(playlist, present: true)
+    }
+
+    private func writePlaylistMembership(_ playlist: PlaylistRef, present: Bool) {
+        guard state == .connected, let id = membership.trackID else { return }
+        applyPlaylistMembership(playlist, trackID: id, present: present)
         Task {
+            let method = present ? "POST" : "DELETE"
+            let url = "https://api.spotify.com/v1/playlists/\(playlist.id)/items"
             do {
-                _ = try await api("DELETE",
-                    "https://api.spotify.com/v1/playlists/\(playlist.id)/items?uris=spotify:track:\(id)")
+                _ = try await api(method, "\(url)?uris=spotify:track:\(id)")
             } catch SpotifyError.http(400, _) {
                 // The new-tier endpoints are inconsistent about query vs body args.
                 do {
                     let body = try JSONEncoder().encode(["uris": ["spotify:track:\(id)"]])
-                    _ = try await api("DELETE",
-                        "https://api.spotify.com/v1/playlists/\(playlist.id)/items", body: body)
+                    _ = try await api(method, url, body: body)
                 } catch {
-                    notchLog("spotify: playlist remove (body form) failed: \(error)")
-                    restorePlaylistEntry(playlist, trackID: id)
+                    notchLog("spotify: playlist \(method) (body form) failed: \(error)")
+                    applyPlaylistMembership(playlist, trackID: id, present: !present)
                 }
             } catch {
-                notchLog("spotify: playlist remove failed: \(error)")
-                restorePlaylistEntry(playlist, trackID: id)
+                notchLog("spotify: playlist \(method) failed: \(error)")
+                applyPlaylistMembership(playlist, trackID: id, present: !present)
             }
         }
     }
 
-    private func restorePlaylistEntry(_ playlist: PlaylistRef, trackID: String) {
-        guard let idx = cache.playlists.firstIndex(where: { $0.id == playlist.id }),
-              !cache.playlists[idx].trackIDs.contains(trackID) else { return }
-        cache.playlists[idx].trackIDs.append(trackID)
+    private func applyPlaylistMembership(_ playlist: PlaylistRef, trackID: String, present: Bool) {
+        guard let idx = cache.playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        if present {
+            guard !cache.playlists[idx].trackIDs.contains(trackID) else { return }
+            cache.playlists[idx].trackIDs.append(trackID)
+        } else {
+            cache.playlists[idx].trackIDs.removeAll { $0 == trackID }
+        }
+        cache.playlists[idx].updatedAt = Date()
         rebuildLookup()
         saveCache()
-        trackChanged(membership.trackID)
+        if membership.trackID == trackID {
+            membership.playlists.removeAll { $0.id == playlist.id }
+            if present { membership.playlists.append(playlist) }
+        }
     }
 
     // MARK: - Playlist index sync
@@ -293,7 +314,11 @@ final class SpotifyLibrary: ObservableObject {
             var fresh: [PlaylistEntry] = []
             for meta in mine {
                 if let cached = old[meta.id], cached.snapshot == meta.snapshot_id {
-                    fresh.append(cached)
+                    // Unchanged contents — keep the track list, refresh the
+                    // cosmetic fields (rename, new cover art).
+                    fresh.append(PlaylistEntry(id: meta.id, name: meta.name, snapshot: meta.snapshot_id,
+                                               image: meta.smallestImage, updatedAt: cached.updatedAt,
+                                               trackIDs: cached.trackIDs))
                     continue
                 }
                 // New-tier apps get 403 on the classic `/playlists/{id}/tracks`;
@@ -306,7 +331,14 @@ final class SpotifyLibrary: ObservableObject {
                     ids += page.items.compactMap { $0?.item?.id }
                     tNext = page.next
                 }
-                fresh.append(PlaylistEntry(id: meta.id, name: meta.name, snapshot: meta.snapshot_id, trackIDs: ids))
+                // A changed snapshot means someone touched this playlist since
+                // last sync — that's our "recently updated" signal. First-ever
+                // sync leaves updatedAt nil so the library order holds until
+                // real activity sorts things.
+                fresh.append(PlaylistEntry(id: meta.id, name: meta.name, snapshot: meta.snapshot_id,
+                                           image: meta.smallestImage,
+                                           updatedAt: old[meta.id] == nil ? nil : Date(),
+                                           trackIDs: ids))
             }
             cache.playlists = fresh
 
@@ -342,12 +374,21 @@ final class SpotifyLibrary: ObservableObject {
     private func rebuildLookup() {
         var map: [String: [PlaylistRef]] = [:]
         for p in cache.playlists {
-            let ref = PlaylistRef(id: p.id, name: p.name)
+            let ref = PlaylistRef(id: p.id, name: p.name, image: p.image)
             for t in p.trackIDs { map[t, default: []].append(ref) }
         }
         trackToPlaylists = map
         likedSet = Set(cache.likedIDs)
         playlistCount = cache.playlists.count
+        // Recently-updated first (Spotify-dialog order); untouched playlists
+        // keep their library order after the active ones.
+        allPlaylists = cache.playlists.enumerated()
+            .sorted { a, b in
+                let da = a.element.updatedAt ?? .distantPast
+                let db = b.element.updatedAt ?? .distantPast
+                return da != db ? da > db : a.offset < b.offset
+            }
+            .map { PlaylistRef(id: $0.element.id, name: $0.element.name, image: $0.element.image) }
     }
 
     private static var cacheURL: URL {
@@ -380,7 +421,11 @@ final class SpotifyLibrary: ObservableObject {
         let snapshot_id: String
         let collaborative: Bool
         let owner: Owner
+        let images: [Image]?
         struct Owner: Decodable { let id: String }
+        struct Image: Decodable { let url: String }
+        /// Spotify lists sizes largest-first; the last is the smallest.
+        var smallestImage: String? { images?.last?.url }
     }
     private struct TrackRef: Decodable { let id: String? }   // id null for local files
     /// `/me/tracks` row (classic shape).
