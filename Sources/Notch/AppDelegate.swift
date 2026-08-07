@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let root = NotchRootView()
             .environmentObject(env.notch)
             .environmentObject(env.music)
+            .environmentObject(env.spotify)
             .environmentObject(env.screenshots)
             .environmentObject(env.audioMeter)
             .environmentObject(env.settings)
@@ -279,6 +280,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showSettingsWindow() {
-        SettingsWindowController.present(settings: env.settings)
+        SettingsWindowController.present(settings: env.settings, spotify: env.spotify)
     }
 }

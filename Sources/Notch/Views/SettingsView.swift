@@ -4,6 +4,7 @@ import SwiftUI
 /// features; more sections will land here as toggleable behaviors get added.
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsStore
+    @EnvironmentObject private var spotify: SpotifyLibrary
 
     var body: some View {
         Form {
@@ -39,8 +40,42 @@ struct SettingsView: View {
             } header: {
                 Text("Screenshots")
             }
+            Section {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(spotifyStatusTitle)
+                        Text(spotify.accessDenied
+                             ? "Spotify is refusing API access (403). In Development mode only allowlisted accounts work — on developer.spotify.com open the app → User Management and add the Spotify account you log in with (or log in as the account that owns the app)."
+                             : "Shows whether the current song is Liked and which of your playlists it's in.")
+                            .font(.caption)
+                            .foregroundStyle(spotify.accessDenied ? .red : .secondary)
+                    }
+                    Spacer()
+                    if spotify.state == .connected {
+                        Button("Sync Now") { Task { await spotify.sync(force: true) } }
+                            .disabled(spotify.isSyncing)
+                        Button("Disconnect") { spotify.disconnect() }
+                    } else {
+                        Button(spotify.state == .connecting ? "Retry Login…" : "Connect…") {
+                            spotify.connect()
+                        }
+                    }
+                }
+            } header: {
+                Text("Spotify")
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 330)
+        .frame(width: 480, height: 420)
+    }
+
+    private var spotifyStatusTitle: String {
+        switch spotify.state {
+        case .connected:
+            if spotify.isSyncing { return "Connected · syncing playlists…" }
+            return "Connected · \(spotify.playlistCount) playlists indexed"
+        case .connecting:    return "Connecting to Spotify…"
+        case .disconnected:  return "Spotify account"
+        }
     }
 }

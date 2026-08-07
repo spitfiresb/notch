@@ -8,7 +8,11 @@ struct MusicTabView: View {
     /// artwork and bars between the peek's small layout and our larger one.
     let namespace: Namespace.ID
     @EnvironmentObject private var music: NowPlayingManager
+    @EnvironmentObject private var spotify: SpotifyLibrary
     private var info: NowPlayingInfo { music.info }
+
+    /// Swap the scrubber+transport rows for the "Saved in" playlist list.
+    @State private var showSavedIn = false
 
     private static let trackFade: Animation = .easeInOut(duration: 0.34)
 
@@ -44,29 +48,54 @@ struct MusicTabView: View {
                 }
             }
 
-            // Middle: elapsed · progress · remaining (draggable scrubber)
-            MusicProgressLine(info: info) { music.seek(to: $0) }
-
-            // Bottom: ⏮ ⏯ ⏭ centred
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                TransportButton(symbol: "backward.fill", size: 13, enabled: info.hasContent) { music.previous() }
-                Spacer().frame(width: 26)
-                PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
-                    music.togglePlayPause()
+            if showSavedIn {
+                SavedInPanel(accent: music.displayAccent) {
+                    withAnimation(.easeOut(duration: 0.18)) { showSavedIn = false }
                 }
-                Spacer().frame(width: 26)
-                TransportButton(symbol: "forward.fill", size: 13, enabled: info.hasContent) { music.next() }
-                Spacer(minLength: 0)
+                .transition(.opacity)
+            } else {
+                // Middle: elapsed · progress · remaining (draggable scrubber)
+                MusicProgressLine(info: info) { music.seek(to: $0) }
+
+                // Bottom: ⏮ ⏯ ⏭ centred, heart & saved-in at the edges
+                ZStack {
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        TransportButton(symbol: "backward.fill", size: 13, enabled: info.hasContent) { music.previous() }
+                        Spacer().frame(width: 26)
+                        PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
+                            music.togglePlayPause()
+                        }
+                        Spacer().frame(width: 26)
+                        TransportButton(symbol: "forward.fill", size: 13, enabled: info.hasContent) { music.next() }
+                        Spacer(minLength: 0)
+                    }
+                    HStack {
+                        SaveButton(enabled: spotifyActionsEnabled) {
+                            withAnimation(.easeOut(duration: 0.18)) { showSavedIn = true }
+                        }
+                        Spacer()
+                    }
+                }
+                .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Collapsing the notch removes this view — drop back to the transport
+        // layout so re-opening doesn't land on a stale playlist list.
+        .onDisappear { showSavedIn = false }
         // One fade applies to every track-driven change: art swap, title/artist
         // text cross-fade, and the dancing-bars accent colour interpolation.
         .animation(Self.trackFade, value: music.displayKey)
         .animation(Self.trackFade, value: info.title)
         .animation(Self.trackFade, value: info.artist)
         .animation(Self.trackFade, value: music.displayAccent)
+    }
+
+    /// Heart / saved-in make sense once we can name the track on Spotify — or
+    /// always, pre-connect, so the buttons can lead into the connect flow.
+    private var spotifyActionsEnabled: Bool {
+        info.hasContent && (spotify.state != .connected || info.spotifyTrackID != nil)
     }
 
     /// Plain content for the artwork slot — no `.id`/`.transition` here because
@@ -85,6 +114,185 @@ struct MusicTabView: View {
                     .foregroundStyle(.white.opacity(0.4))
             }
         }
+    }
+}
+
+/// Spotify's own save affordance, one button: grey ⊕ when the track isn't saved
+/// anywhere (click = save to Liked Songs, plus morphs into the green check),
+/// green ✓ when it's Liked or in any of your playlists (click = show where).
+/// Before login it leads into the connect flow.
+private struct SaveButton: View {
+    @EnvironmentObject private var spotify: SpotifyLibrary
+    let enabled: Bool
+    /// Opens the "Saved in" panel (also hosts the connect / error states).
+    let showList: () -> Void
+
+    @State private var hovering = false
+    @State private var pressed = false
+
+    static let spotifyGreen = Color(red: 0.12, green: 0.84, blue: 0.38)
+
+    private var saved: Bool { spotify.state == .connected && spotify.membership.hasAny }
+    private let size: CGFloat = 13
+
+    var body: some View {
+        Image(systemName: saved ? "checkmark.circle.fill" : "plus.circle")
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(saved ? Self.spotifyGreen : .white.opacity(hovering ? 1 : 0.55))
+            .contentTransition(.symbolEffect(.replace))
+            .symbolEffect(.bounce, value: saved)
+            .frame(width: size + 12, height: size + 8)
+            .contentShape(Rectangle())
+            .scaleEffect(pressed ? 0.78 : (hovering ? 1.2 : 1))
+            .animation(pressed ? .easeOut(duration: 0.12)
+                               : .spring(response: 0.68, dampingFraction: 0.5),
+                       value: pressed)
+            .animation(.spring(response: 0.32, dampingFraction: 0.62), value: hovering)
+            .opacity(enabled ? 1 : 0.3)
+            .onHover { if enabled { hovering = $0 } }
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { _ in if enabled && !pressed { pressed = true } }
+                    .onEnded { v in
+                        pressed = false
+                        guard enabled else { return }
+                        let bounds = CGRect(x: 0, y: 0, width: size + 12, height: size + 8)
+                        guard bounds.contains(v.location) else { return }
+                        if spotify.state == .connected, !saved, spotify.membership.trackID != nil {
+                            spotify.setLiked(true)   // ⊕ = save to Liked Songs
+                            Haptics.tick()
+                        } else {
+                            showList()
+                        }
+                    }
+            )
+    }
+}
+
+/// Replaces the scrubber + transport rows: which of your playlists hold the
+/// current track (plus Liked Songs), or the connect / syncing states that
+/// precede having an answer.
+private struct SavedInPanel: View {
+    @EnvironmentObject private var spotify: SpotifyLibrary
+    let accent: Color
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("SAVED IN")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .kerning(0.8)
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                TransportButton(symbol: "xmark", size: 9, enabled: true, action: onClose)
+            }
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch spotify.state {
+        case .disconnected:
+            HStack(spacing: 8) {
+                Text("Connect Spotify to see where this song is saved.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Connect") { spotify.connect() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(accent.opacity(0.9), in: Capsule())
+                    .foregroundStyle(.black)
+            }
+            .frame(maxHeight: .infinity)
+        case .connecting:
+            HStack(spacing: 8) {
+                Text("Finish logging in in your browser…")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Retry") { spotify.connect() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(.white.opacity(0.14), in: Capsule())
+                    .foregroundStyle(.white)
+            }
+            .frame(maxHeight: .infinity)
+        case .connected:
+            if spotify.accessDenied {
+                statusLine("Spotify denied access (403) — the logged-in Spotify account must be added under User Management on the developer dashboard.")
+            } else if spotify.membership.trackID == nil {
+                statusLine("This track isn't playing from Spotify.")
+            } else if !spotify.membership.hasAny {
+                statusLine(spotify.isSyncing ? "Syncing your playlists…"
+                                             : "Not saved in any of your playlists.")
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if spotify.membership.liked == true {
+                            SavedInRow(symbol: "heart.fill", name: "Liked Songs", accent: accent) {
+                                spotify.setLiked(false)
+                                Haptics.tick()
+                            }
+                        }
+                        ForEach(spotify.membership.playlists) { ref in
+                            SavedInRow(symbol: "music.note.list", name: ref.name, accent: accent) {
+                                spotify.removeFromPlaylist(ref)
+                                Haptics.tick()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func statusLine(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10))
+            .foregroundStyle(.white.opacity(0.5))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+}
+
+/// One "Saved in" entry. The trailing green check flips to a remove (⊖) on
+/// hover — clicking it takes the track out of that playlist (or Liked Songs),
+/// mirroring Spotify's own toggle rows.
+private struct SavedInRow: View {
+    let symbol: String
+    let name: String
+    let accent: Color
+    let onRemove: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 8.5))
+                .foregroundStyle(accent)
+                .frame(width: 12)
+            Text(name)
+                .font(.system(size: 10.5, weight: .medium))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: hovering ? "minus.circle.fill" : "checkmark.circle.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(hovering ? Color(red: 1.0, green: 0.36, blue: 0.34)
+                                          : SaveButton.spotifyGreen)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .contentShape(Rectangle())
+        .onHover { h in
+            withAnimation(.easeOut(duration: 0.12)) { hovering = h }
+        }
+        .onTapGesture { if hovering { onRemove() } }
     }
 }
 
