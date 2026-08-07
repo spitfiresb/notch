@@ -183,7 +183,7 @@ private struct ConfettiBurst: View {
 
     @State private var startedAt: Date?
 
-    private static let duration = 0.6
+    private static let duration = 0.42
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: startedAt == nil)) { ctx in
@@ -197,11 +197,14 @@ private struct ConfettiBurst: View {
                     let angle = (Double(i) + 0.5) / 16 * 2 * .pi
                     let radius: CGFloat = 13 + CGFloat((i * 7) % 3) * 3   // slight per-dot variance
                     let dot: CGFloat = i.isMultiple(of: 2) ? 1.2 : 0.9
+                    // Gravity: the radial launch decelerates (eased) while a
+                    // t² drop accumulates, so dots arc outward then fall away.
+                    let drop = p * p * (2 + CGFloat((i * 5) % 4))
                     Circle()
                         .fill(color)
                         .frame(width: dot, height: dot)
                         .offset(x: cos(angle) * radius * eased,
-                                y: sin(angle) * radius * eased)
+                                y: sin(angle) * radius * eased + drop)
                         // Solid for most of the flight, quick fade at the very end.
                         .opacity(p < 0.75 ? 1 : Double(max(0, 1 - (p - 0.75) / 0.25)))
                 }
