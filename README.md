@@ -40,17 +40,17 @@
 </table>
 
 - **Now Playing, from anywhere**: reads the system's Now Playing data (the same source Control Center uses), with a Spotify Apple-Events fallback for macOS versions that lock MediaRemote down. Play/pause, skip, and seek from the notch.
-- **Your Spotify library, in the notch**: connect your Spotify account and the save button answers the question the desktop app answers nowhere else at a glance: *where* is this song saved? Grey ⊕ means nowhere; one click likes it, with a little confetti burst. Green ✓ means it's Liked or playlisted; click and the notch grows downward into a panel listing every playlist that holds it, plus the rest of your playlists so you can add or remove it in place.
-
-  ![Saved-in panel](docs/assets/saved-in.png)
-
-  *The save button unfolded: the current track is in Liked Songs; the rows below add it to any other playlist with one click.*
 - **Real audio visualization**: a CoreAudio process tap feeds six log-spaced bandpass filters (80 Hz to 7 kHz); each bar is a real frequency band with its own attack/release envelope. Not a canned animation.
 - **Screenshots tab**: watches for new screenshots, pops a toast, optionally copies them straight to the clipboard and routes them into a tidy folder. Swipe horizontally on the trackpad to switch tabs.
 
   ![Screenshot toast and screenshots tab](docs/assets/screenshot-demo.gif)
 
   *Take a screenshot → the notch pops a "copied to clipboard" toast; hover it to reveal the recent-screenshots strip.*
+- **Your Spotify library, in the notch**: connect your Spotify account and the save button answers the question the desktop app answers nowhere else at a glance: *where* is this song saved? Grey ⊕ means nowhere; one click likes it, with a little confetti burst. Green ✓ means it's Liked or playlisted; click and the notch grows downward into a panel listing every playlist that holds it, plus the rest of your playlists so you can add or remove it in place.
+
+  ![Saved-in panel](docs/assets/saved-in.png)
+
+  *The save button unfolded: the current track is in Liked Songs; the rows below add it to any other playlist with one click.*
 - **Stays out of the way**: no Dock icon, no menu bar item. It pins itself across every Space (including full-screen apps), ducks off-screen when Mission Control or App Exposé takes over, and launches at login (toggleable in Settings). Switch to the Screenshots tab and it stays your tab for 30 seconds of inactivity before reverting to Music.
 
 ## Why it's interesting under the hood
