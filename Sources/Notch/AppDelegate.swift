@@ -14,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTimer: Timer?
     private var hoverGlobalMonitor: Any?
     private var hoverLocalMonitor: Any?
+    /// Blob rect used by the previous hover evaluation, so we can tell a genuine
+    /// "cursor moved out" from "the blob shrank out from under a still cursor".
+    private var lastBlobRect: NSRect?
+    /// Latched pre-shrink blob rect: while the cursor sits inside it, hover still
+    /// counts as inside the notch. See `evaluateHover`.
+    private var hoverGraceRect: NSRect?
     private var overlayTimer: Timer?
     /// Pending "drop the window after the retract animation" — cancelled if the
     /// overlay closes again before it fires.
@@ -143,7 +149,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               width: blobSize.width,
                               height: blobSize.height)
 
-        if blobRect.contains(NSEvent.mouseLocation) {
+        let mouse = NSEvent.mouseLocation
+
+        // Collapsing the music panel (the ✕) shrinks the blob while the cursor is
+        // parked where the panel used to be — geometrically "outside", but the user
+        // hasn't moved, so closing the whole notch there feels like the click did
+        // two things. Latch the pre-shrink rect and keep counting the cursor as
+        // inside until it actually leaves that area; then normal hover resumes.
+        if notch.isOpen, let last = lastBlobRect, last.height > blobRect.height,
+           last.contains(mouse), !blobRect.contains(mouse) {
+            hoverGraceRect = last
+        }
+        lastBlobRect = blobRect
+        if !notch.isOpen || blobRect.contains(mouse)
+            || !(hoverGraceRect?.contains(mouse) ?? false) {
+            hoverGraceRect = nil
+        }
+
+        if blobRect.contains(mouse) || hoverGraceRect != nil {
             notch.cancelScheduledClose()
             if !notch.isOpen {
                 notch.open()

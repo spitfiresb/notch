@@ -232,6 +232,8 @@ private struct SavedInPanel: View {
     let accent: Color
     let onClose: () -> Void
 
+    private static let slide = Animation.spring(response: 0.4, dampingFraction: 0.82)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
@@ -294,25 +296,27 @@ private struct SavedInPanel: View {
                     VStack(alignment: .leading, spacing: 4) {
                         PlaylistToggleRow(art: .liked, name: "Liked Songs",
                                           contained: spotify.membership.liked == true) {
-                            spotify.setLiked(!(spotify.membership.liked == true))
-                            Haptics.tick()
-                        }
-                        ForEach(saved) { ref in
-                            PlaylistToggleRow(art: .cover(ref.image), name: ref.name, contained: true) {
-                                spotify.removeFromPlaylist(ref)
-                                Haptics.tick()
+                            withAnimation(Self.slide) {
+                                spotify.setLiked(!(spotify.membership.liked == true))
                             }
                         }
-                        if !others.isEmpty {
-                            Text("ADD TO")
-                                .font(.system(size: 8, weight: .bold))
-                                .kerning(0.8)
-                                .foregroundStyle(.white.opacity(0.35))
-                                .padding(.top, 6)
-                            ForEach(others) { ref in
-                                PlaylistToggleRow(art: .cover(ref.image), name: ref.name, contained: false) {
-                                    spotify.addToPlaylist(ref)
-                                    Haptics.tick()
+                        // One ForEach spanning both sections: a toggle is then a pure
+                        // reorder of stable identities, which SwiftUI animates as a
+                        // slide — splitting into two ForEaches would make it a
+                        // remove+insert pair and leave a fading ghost of the row.
+                        ForEach(saved + others) { ref in
+                            let isSaved = saved.contains { $0.id == ref.id }
+                            if ref.id == others.first?.id {
+                                Text("ADD TO")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .kerning(0.8)
+                                    .foregroundStyle(.white.opacity(0.35))
+                                    .padding(.top, 6)
+                            }
+                            PlaylistToggleRow(art: .cover(ref.image), name: ref.name, contained: isSaved) {
+                                withAnimation(Self.slide) {
+                                    isSaved ? spotify.removeFromPlaylist(ref)
+                                            : spotify.addToPlaylist(ref)
                                 }
                             }
                         }
@@ -357,21 +361,35 @@ private struct PlaylistToggleRow: View {
                 .foregroundStyle(.white.opacity(contained || hovering ? 1 : 0.7))
                 .lineLimit(1)
             Spacer(minLength: 0)
-            Image(systemName: contained ? (hovering ? "minus.circle.fill" : "checkmark.circle.fill")
-                                        : "circle")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(contained
-                                 ? (hovering ? Color(red: 1.0, green: 0.36, blue: 0.34)
-                                             : SaveButton.spotifyGreen)
-                                 : .white.opacity(hovering ? 0.9 : 0.35))
-                .contentTransition(.symbolEffect(.replace))
+            // Two stacked symbols cross-faded by `contained` rather than one Image
+            // whose symbol name changes: a name swap re-renders discontinuously and
+            // the indicator teleports instead of sliding with the row, while
+            // opacity/scale interpolate cleanly inside the reorder spring.
+            ZStack {
+                Image(systemName: "circle")
+                    .foregroundStyle(.white.opacity(hovering ? 0.9 : 0.35))
+                    .opacity(contained ? 0 : 1)
+                Image(systemName: hovering ? "minus.circle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(hovering ? Color(red: 1.0, green: 0.36, blue: 0.34)
+                                              : SaveButton.spotifyGreen)
+                    .contentTransition(.symbolEffect(.replace))
+                    .opacity(contained ? 1 : 0)
+                    .scaleEffect(contained ? 1 : 0.3)
+            }
+            .font(.system(size: 11, weight: .semibold))
         }
         .padding(.vertical, 1)
         .contentShape(Rectangle())
         .onHover { h in
             withAnimation(.easeOut(duration: 0.12)) { hovering = h }
         }
-        .onTapGesture(perform: onToggle)
+        .onTapGesture {
+            // Drop hover styling immediately: the row slides away from the cursor
+            // on toggle, and a lingering hover state paints the wrong indicator
+            // (white ○ / red ⊖) until onHover(false) catches up mid-slide.
+            hovering = false
+            onToggle()
+        }
     }
 
     @ViewBuilder private var artwork: some View {
@@ -542,21 +560,46 @@ private struct MusicProgressLine: View {
             let displayFraction = dragFraction ?? liveFraction
             let displaySecs = Double(displayFraction) * total
 
+            // Both labels are derived from the SAME integer second, so they always
+            // tick in the same frame. Rounding each side independently would make
+            // them flip at different fractions of a second (durations are rarely
+            // whole numbers), which reads as the two clocks running out of step.
+            let totalSecs = max(0, Int(total.rounded()))
+            let elapsedSecs = min(max(0, Int(displaySecs)), totalSecs)
+            let remainingSecs = totalSecs - elapsedSecs
+
             HStack(spacing: 7) {
-                Text(format(displaySecs))
-                    .font(.system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.55))
-                    .frame(width: 26, alignment: .leading)
+                // Both labels reserve the width of the longest string they can ever
+                // show for this track (monospaced digits ⇒ that's the full duration),
+                // so nothing clips on hour-long podcasts and the bar never jitters as
+                // the digits tick. The scrubber soaks up whatever is left.
+                timeLabel(format(elapsedSecs),
+                          widest: format(totalSecs),
+                          alignment: .leading)
 
                 scrubber(fraction: displayFraction, totalSeconds: total)
 
-                Text("-\(format(max(0, total - displaySecs)))")
-                    .font(.system(size: 9, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.55))
-                    .frame(width: 30, alignment: .trailing)
+                timeLabel("-\(format(remainingSecs))",
+                          widest: "-\(format(totalSecs))",
+                          alignment: .trailing)
             }
         }
         .opacity(info.duration ?? 0 > 0 ? 1 : 0.35)
+    }
+
+    private static let timeFont = Font.system(size: 9, weight: .medium).monospacedDigit()
+
+    private func timeLabel(_ text: String, widest: String, alignment: Alignment) -> some View {
+        Text(widest)
+            .font(Self.timeFont)
+            .hidden()
+            .overlay(alignment: alignment) {
+                Text(text)
+                    .font(Self.timeFont)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize()
+            }
+            .fixedSize()
     }
 
     private func scrubber(fraction: CGFloat, totalSeconds total: Double) -> some View {
@@ -604,8 +647,11 @@ private struct MusicProgressLine: View {
 
     private func clamp01(_ x: CGFloat) -> CGFloat { min(1, max(0, x)) }
 
-    private func format(_ s: Double) -> String {
-        let v = max(0, Int(s.rounded()))
+    private func format(_ seconds: Int) -> String {
+        let v = max(0, seconds)
+        if v >= 3600 {
+            return String(format: "%d:%02d:%02d", v / 3600, (v % 3600) / 60, v % 60)
+        }
         return String(format: "%d:%02d", v / 60, v % 60)
     }
 }
