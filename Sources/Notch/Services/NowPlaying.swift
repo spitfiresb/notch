@@ -12,6 +12,7 @@ struct NowPlayingInfo: Equatable {
     var artworkKey: String?     // url or track id, so we can avoid re-fetching artwork
     var accentColor: Color?     // vibrant tint derived from the artwork
     var source = ""             // "Spotify", "Now Playing", …
+    var spotifyTrackID: String? // bare id (no "spotify:track:" prefix) when the track is resolvable in Spotify
     var duration: Double?       // total seconds
     var elapsed: Double?        // seconds at `elapsedAt`
     var elapsedAt: Date?        // wall-clock time when `elapsed` was sampled
@@ -43,6 +44,9 @@ final class NowPlayingManager: ObservableObject {
     private var usingSpotifyFallback = false
     private var artworkCache: [String: NSImage] = [:]
     private var accentCache: [String: Color] = [:]
+    /// artist+title → Spotify track id, so the AppleScript id lookup on the
+    /// MediaRemote path runs once per track instead of on every refresh.
+    private var spotifyIDCache: [String: String] = [:]
 
     func start() {
         mr.registerForNotifications { [weak self] in self?.refresh() }
@@ -105,6 +109,7 @@ final class NowPlayingManager: ObservableObject {
             if var mrInfo, mrInfo.hasContent {
                 self.usingSpotifyFallback = false
                 self.attachArtwork(&mrInfo)
+                self.attachSpotifyTrackID(&mrInfo)
                 self.info = mrInfo
             } else if let (spot, artURL) = SpotifyBridge.fetch() {
                 self.usingSpotifyFallback = true
@@ -147,6 +152,24 @@ final class NowPlayingManager: ObservableObject {
             info.accentColor = accent
             if let key = info.artworkKey { accentCache[key] = accent }
         }
+    }
+
+    /// The MediaRemote payload has no Spotify id, but if Spotify is the thing
+    /// playing we can ask it directly — one synchronous Apple Events round-trip
+    /// per new track (same cost profile as the fallback path's fetch). The title
+    /// must match so we don't mislabel some other app's audio.
+    private func attachSpotifyTrackID(_ info: inout NowPlayingInfo) {
+        let key = "\(info.artist)\u{1}\(info.title)"
+        if let cached = spotifyIDCache[key] {
+            info.spotifyTrackID = cached
+            return
+        }
+        guard SpotifyBridge.isRunning,
+              let (id, name) = SpotifyBridge.currentTrackIDAndName(),
+              name == info.title,
+              let bare = SpotifyBridge.bareTrackID(id) else { return }
+        spotifyIDCache[key] = bare
+        info.spotifyTrackID = bare
     }
 
     private func loadArtwork(from url: URL, key: String?) {
@@ -322,6 +345,26 @@ enum SpotifyBridge {
         _ = run("set player position to \(seconds)")
     }
 
+    /// "spotify:track:xxxx" → "xxxx"; nil for episodes / local files / anything else.
+    static func bareTrackID(_ uri: String) -> String? {
+        guard uri.hasPrefix("spotify:track:") else { return nil }
+        return String(uri.dropFirst("spotify:track:".count))
+    }
+
+    /// Lightweight id+name probe used when MediaRemote (not Apple Events) is the
+    /// primary data source but we still want the Spotify track id.
+    static func currentTrackIDAndName() -> (id: String, name: String)? {
+        guard isRunning else { return nil }
+        let body = """
+        if player state is stopped then return ""
+        return (id of current track) & linefeed & (name of current track)
+        """
+        guard let out = run(body), !out.isEmpty else { return nil }
+        let parts = out.components(separatedBy: "\n")
+        guard parts.count >= 2 else { return nil }
+        return (parts[0], parts[1...].joined(separator: "\n"))
+    }
+
     /// Returns the current track plus an optional artwork URL to fetch asynchronously.
     static func fetch() -> (NowPlayingInfo, URL?)? {
         guard isRunning else { return nil }
@@ -345,6 +388,7 @@ enum SpotifyBridge {
         info.artist = parts[1]
         info.album = parts[2]
         info.artworkKey = parts[3].isEmpty ? "\(parts[1])\u{1}\(parts[0])" : parts[3]
+        info.spotifyTrackID = bareTrackID(parts[3])
         info.isPlaying = parts[5] == "playing"
         info.source = "Spotify"
         if parts.count >= 8 {

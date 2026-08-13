@@ -37,6 +37,11 @@ enum ScreenMetrics {
     /// pure, smooth SwiftUI animation with no window-resize jank.
     static let expandedSize = CGSize(width: 300, height: 108)
 
+    /// Taller music-tab state: transport stays put and the "Saved in" playlist
+    /// panel unfolds beneath it. The window is always THIS size — the biggest
+    /// blob must fit inside it.
+    static let expandedMusicSize = CGSize(width: 300, height: 256)
+
     /// Compact size used for the transient "screenshot copied" banner.
     static let toastSize = CGSize(width: 252, height: 46)
 }
@@ -92,7 +97,7 @@ final class NotchPanel: NSPanel {
         host.autoresizingMask = [.width, .height]
         self.hosting = host
 
-        super.init(contentRect: NSRect(origin: .zero, size: ScreenMetrics.expandedSize),
+        super.init(contentRect: NSRect(origin: .zero, size: ScreenMetrics.expandedMusicSize),
                    styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
 
@@ -135,7 +140,7 @@ final class NotchPanel: NSPanel {
     func reposition() {
         guard let screen = ScreenMetrics.screen else { return }
         let sf = screen.frame
-        let size = ScreenMetrics.expandedSize
+        let size = ScreenMetrics.expandedMusicSize
         setFrame(NSRect(x: (sf.minX + sf.maxX) / 2 - size.width / 2,
                         y: sf.maxY - size.height,
                         width: size.width, height: size.height),

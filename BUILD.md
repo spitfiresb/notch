@@ -44,12 +44,16 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
 - `Window/SettingsWindowController.swift` — standalone settings window (opened from the gear in
   the expanded notch).
 - `Views/NotchRootView.swift` — the blob: collapsed peek ↔ expanded morph, toast, dancing bars.
-- `Views/Tabs.swift` — Music and Screenshots tab UIs, including the scrubber.
+- `Views/Tabs.swift` — Music and Screenshots tab UIs, including the scrubber, save/like button,
+  and the expanding "Saved in" playlist panel.
 - `Views/OnboardingView.swift` — first-run permissions walkthrough.
-- `Views/SettingsView.swift` — screenshot routing / clipboard toggles.
+- `Views/SettingsView.swift` — launch-at-login, screenshot routing / clipboard toggles, and the
+  Spotify connect / sync / disconnect controls.
 - `Services/AudioMeter.swift` — CoreAudio process tap → six bandpass-filtered levels driving the bars.
 - `Services/NowPlaying.swift` — `MediaRemoteBridge` (private framework, system "Now Playing") with a
   Spotify-via-Apple-Events fallback (event-driven via Spotify's `PlaybackStateChanged` notification).
+- `Services/SpotifyLibrary.swift` — Spotify Web API client: PKCE OAuth with a loopback redirect,
+  a local snapshot-diffed mirror of your playlists, and like / add-to-playlist writes.
 - `Services/ScreenshotWatcher.swift` — screenshot detection, toast + optional clipboard copy / folder routing.
 - `Services/SpaceAttacher.swift` — pins the panel to every Space via private CGS calls.
 - `Services/TrackpadGestureMonitor.swift` — tracks live trackpad gestures so Space swipes aren't fought.

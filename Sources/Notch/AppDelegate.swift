@@ -14,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTimer: Timer?
     private var hoverGlobalMonitor: Any?
     private var hoverLocalMonitor: Any?
+    /// Blob rect used by the previous hover evaluation, so we can tell a genuine
+    /// "cursor moved out" from "the blob shrank out from under a still cursor".
+    private var lastBlobRect: NSRect?
+    /// Latched pre-shrink blob rect: while the cursor sits inside it, hover still
+    /// counts as inside the notch. See `evaluateHover`.
+    private var hoverGraceRect: NSRect?
     private var overlayTimer: Timer?
     /// Pending "drop the window after the retract animation" — cancelled if the
     /// overlay closes again before it fires.
@@ -34,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let root = NotchRootView()
             .environmentObject(env.notch)
             .environmentObject(env.music)
+            .environmentObject(env.spotify)
             .environmentObject(env.screenshots)
             .environmentObject(env.audioMeter)
             .environmentObject(env.settings)
@@ -129,15 +136,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let panel else { return }
         let notch = env.notch
         if notch.isSystemOverlayActive { return }
+        // The window is always the tallest (music-expanded) size; the visible
+        // blob may be smaller, so hover-tracking follows the blob, not the frame.
         let wf = panel.frame
-        let blobRect: NSRect = notch.isOpen
-            ? wf
-            : NSRect(x: wf.midX - ScreenMetrics.notchSize.width / 2,
-                     y: wf.maxY - ScreenMetrics.notchSize.height,
-                     width: ScreenMetrics.notchSize.width,
-                     height: ScreenMetrics.notchSize.height)
+        let blobSize: CGSize = notch.isOpen
+            ? (notch.tab == .music && notch.musicPanelExpanded
+               ? ScreenMetrics.expandedMusicSize
+               : ScreenMetrics.expandedSize)
+            : ScreenMetrics.notchSize
+        let blobRect = NSRect(x: wf.midX - blobSize.width / 2,
+                              y: wf.maxY - blobSize.height,
+                              width: blobSize.width,
+                              height: blobSize.height)
 
-        if blobRect.contains(NSEvent.mouseLocation) {
+        let mouse = NSEvent.mouseLocation
+
+        // Collapsing the music panel (the ✕) shrinks the blob while the cursor is
+        // parked where the panel used to be — geometrically "outside", but the user
+        // hasn't moved, so closing the whole notch there feels like the click did
+        // two things. Latch the pre-shrink rect and keep counting the cursor as
+        // inside until it actually leaves that area; then normal hover resumes.
+        if notch.isOpen, let last = lastBlobRect, last.height > blobRect.height,
+           last.contains(mouse), !blobRect.contains(mouse) {
+            hoverGraceRect = last
+        }
+        lastBlobRect = blobRect
+        if !notch.isOpen || blobRect.contains(mouse)
+            || !(hoverGraceRect?.contains(mouse) ?? false) {
+            hoverGraceRect = nil
+        }
+
+        if blobRect.contains(mouse) || hoverGraceRect != nil {
             notch.cancelScheduledClose()
             if !notch.isOpen {
                 notch.open()
@@ -279,6 +308,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showSettingsWindow() {
-        SettingsWindowController.present(settings: env.settings)
+        SettingsWindowController.present(settings: env.settings, spotify: env.spotify)
     }
 }

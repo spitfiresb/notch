@@ -6,6 +6,7 @@ import Combine
 final class AppEnvironment: ObservableObject {
     let notch = NotchState()
     let music = NowPlayingManager()
+    let spotify = SpotifyLibrary()
     let screenshots = ScreenshotWatcher()
     let audioMeter = AudioMeter()
     let settings = SettingsStore()
@@ -16,6 +17,14 @@ final class AppEnvironment: ObservableObject {
 
     func start() {
         music.start()
+        spotify.start()
+        // Feed track changes into the Spotify library so the like/playlist
+        // lookup always describes what's actually playing.
+        music.$info
+            .map(\.spotifyTrackID)
+            .removeDuplicates()
+            .sink { [weak self] id in self?.spotify.trackChanged(id) }
+            .store(in: &cancellables)
         // Run the system-audio tap only while something is actually playing —
         // the tap + realtime IO thread + 60 Hz UI publish are the app's main
         // idle CPU/battery cost, and the bars freeze when paused anyway. The
@@ -77,8 +86,13 @@ final class NotchState: ObservableObject {
     }
 
     @Published var isOpen = false
-    @Published var tab: Tab = .music
+    @Published var tab: Tab = .music {
+        didSet { if tab != .music { musicPanelExpanded = false } }
+    }
     @Published var toast: ScreenshotToast?
+    /// Music tab's taller state — the "Saved in" playlist panel unfolded
+    /// beneath the transport controls.
+    @Published var musicPanelExpanded = false
 
     /// `true` while Mission Control / App Exposé / Launchpad / Show Desktop is on
     /// screen. The panel is fully hidden then so it doesn't cover the system overlay.
@@ -109,6 +123,7 @@ final class NotchState: ObservableObject {
         pinnedUntil = nil
         toast = nil
         isOpen = false
+        musicPanelExpanded = false
         scheduleTabRevert()
     }
 
