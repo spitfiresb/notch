@@ -52,7 +52,7 @@ final class SpotifyLibrary: ObservableObject {
     private struct PlaylistEntry: Codable {
         let id: String
         let name: String
-        let snapshot: String
+        var snapshot: String
         let image: String?
         /// When we last saw this playlist change (snapshot flip or our own
         /// write) — the API has no real modified-date, so this proxy drives the
@@ -252,21 +252,27 @@ final class SpotifyLibrary: ObservableObject {
         guard state == .connected, let id = membership.trackID else { return }
         applyPlaylistMembership(playlist, trackID: id, present: present)
         Task {
-            let method = present ? "POST" : "DELETE"
             let url = "https://api.spotify.com/v1/playlists/\(playlist.id)/items"
             do {
-                _ = try await api(method, "\(url)?uris=spotify:track:\(id)")
-            } catch SpotifyError.http(400, _) {
-                // The new-tier endpoints are inconsistent about query vs body args.
-                do {
-                    let body = try JSONEncoder().encode(["uris": ["spotify:track:\(id)"]])
-                    _ = try await api(method, url, body: body)
-                } catch {
-                    notchLog("spotify: playlist \(method) (body form) failed: \(error)")
-                    applyPlaylistMembership(playlist, trackID: id, present: !present)
+                let data: Data
+                if present {
+                    data = try await api("POST", "\(url)?uris=spotify:track:\(id)")
+                } else {
+                    // DELETE ignores the `uris` query (400 "No uris provided") —
+                    // it only takes the classic-style JSON body, renamed to `items`.
+                    let body = try JSONEncoder().encode(["items": [["uri": "spotify:track:\(id)"]]])
+                    data = try await api("DELETE", url, body: body)
+                }
+                // Adopt the snapshot our own write produced, so the next sync
+                // doesn't refetch the whole playlist just to observe it.
+                struct Response: Decodable { let snapshot_id: String? }
+                if let snap = (try? JSONDecoder().decode(Response.self, from: data))?.snapshot_id,
+                   let idx = cache.playlists.firstIndex(where: { $0.id == playlist.id }) {
+                    cache.playlists[idx].snapshot = snap
+                    saveCache()
                 }
             } catch {
-                notchLog("spotify: playlist \(method) failed: \(error)")
+                notchLog("spotify: playlist \(present ? "add" : "remove") failed: \(error)")
                 applyPlaylistMembership(playlist, trackID: id, present: !present)
             }
         }
