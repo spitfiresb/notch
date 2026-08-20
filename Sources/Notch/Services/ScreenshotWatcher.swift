@@ -137,7 +137,30 @@ final class ScreenshotWatcher: ObservableObject {
         didInitialScan = true
     }
 
-    private static func isScreenshot(_ url: URL) -> Bool {
+    // MARK: Cleanup
+
+    /// Screenshots (and only screenshots — `isScreenshot` naming/Spotlight match)
+    /// currently sitting in the watched folder.
+    nonisolated static func screenshotsInCurrentFolder() -> [URL] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: screenshotDirectory, includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]) else { return [] }
+        return entries.filter { isScreenshot($0) }
+    }
+
+    /// Move every screenshot in the watched folder to the Trash (recoverable —
+    /// never a hard delete). Returns how many were trashed.
+    nonisolated static func trashAllScreenshots() -> Int {
+        var trashed = 0
+        for url in screenshotsInCurrentFolder() {
+            if (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil {
+                trashed += 1
+            }
+        }
+        return trashed
+    }
+
+    nonisolated private static func isScreenshot(_ url: URL) -> Bool {
         guard ["png", "jpg", "jpeg", "heic", "tiff", "pdf"].contains(url.pathExtension.lowercased()) else { return false }
         let name = url.lastPathComponent
         // macOS default screenshot names ("Screenshot …" / older "Screen Shot …").

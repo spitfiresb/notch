@@ -6,7 +6,8 @@ import SwiftUI
 final class OnboardingWindowController: NSWindowController {
     private let onFinish: () -> Void
 
-    init(spotify: SpotifyLibrary, openSettings: @escaping () -> Void, onFinish: @escaping () -> Void) {
+    init(settings: SettingsStore, spotify: SpotifyLibrary,
+         openSettings: @escaping () -> Void, onFinish: @escaping () -> Void) {
         self.onFinish = onFinish
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 420),
                               styleMask: [.titled, .closable, .fullSizeContentView],
@@ -18,7 +19,8 @@ final class OnboardingWindowController: NSWindowController {
         window.center()
         super.init(window: window)
         window.contentViewController = NSHostingController(
-            rootView: OnboardingView(spotify: spotify, openSettings: openSettings) { [weak self] in
+            rootView: OnboardingView(settings: settings, spotify: spotify,
+                                     openSettings: openSettings) { [weak self] in
                 self?.close()
                 self?.onFinish()
             })
@@ -32,6 +34,7 @@ private enum Step: Int, CaseIterable {
 }
 
 struct OnboardingView: View {
+    @ObservedObject var settings: SettingsStore
     @ObservedObject var spotify: SpotifyLibrary
     let openSettings: () -> Void
     let finish: () -> Void
@@ -82,14 +85,35 @@ struct OnboardingView: View {
                 primaryDisabled: !SpotifyBridge.isRunning,
                 openSettings: { Permissions.openAutomationSettings() })
         case .screenshots:
-            permissionPage(
-                icon: "camera.viewfinder",
-                title: "Screenshot folder",
-                body: "Notch watches your screenshots folder so new screenshots pop into the notch. macOS may ask for access to that folder.",
-                granted: Permissions.probeScreenshotFolderAccess(),
-                primaryTitle: "Grant access",
-                primary: { Permissions.probeScreenshotFolderAccess() },
-                openSettings: { Permissions.openFilesAndFoldersSettings() })
+            VStack(spacing: 12) {
+                Spacer()
+                Image(systemName: "camera.viewfinder").font(.system(size: 36)).foregroundStyle(.tint)
+                Text("Screenshots").font(.title3.bold())
+                Text("New screenshots pop into the notch, ready to drag anywhere.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                if settings.routeScreenshotsToFolder {
+                    Label("Saving to Pictures › Screenshots", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green).font(.headline)
+                } else if Permissions.probeScreenshotFolderAccess() {
+                    Label("Desktop access granted", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green).font(.headline)
+                } else {
+                    Button("Use a tidy Screenshots folder") {
+                        settings.routeScreenshotsToFolder = true
+                        tick.toggle()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Text("Recommended — saves to ~/Pictures/Screenshots. No permission needed.")
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button("Keep saving to the Desktop instead") {
+                        Permissions.probeScreenshotFolderAccess()   // triggers the Desktop-access prompt
+                        tick.toggle()
+                    }
+                    .buttonStyle(.link).font(.callout)
+                }
+                Spacer()
+            }
         case .library:
             VStack(spacing: 12) {
                 Spacer()

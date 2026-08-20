@@ -299,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showOnboarding() {
         let controller = OnboardingWindowController(
+            settings: env.settings,
             spotify: env.spotify,
             openSettings: { [weak self] in self?.showSettingsWindow() }
         ) { [weak self] in
