@@ -9,7 +9,7 @@ final class OnboardingWindowController: NSWindowController {
     init(settings: SettingsStore, spotify: SpotifyLibrary,
          openSettings: @escaping () -> Void, onFinish: @escaping () -> Void) {
         self.onFinish = onFinish
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 420),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 440),
                               styleMask: [.titled, .closable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.title = "Welcome to Notch"
@@ -27,10 +27,16 @@ final class OnboardingWindowController: NSWindowController {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func close() {
+        // Don't leave an orphaned "drag Notch into the list" overlay behind.
+        PermissionPromptAssistant.shared.dismiss()
+        super.close()
+    }
 }
 
 private enum Step: Int, CaseIterable {
-    case welcome, accessibility, spotify, screenshots, library, done
+    case welcome, permissions, library, done
 }
 
 struct OnboardingView: View {
@@ -39,20 +45,38 @@ struct OnboardingView: View {
     let openSettings: () -> Void
     let finish: () -> Void
     @State private var step: Step = .welcome
-    @State private var tick = false   // toggled to re-check live permission state
+    @State private var snapshot = Permissions.snapshot()
+    @State private var refreshTimer: Timer?
 
     var body: some View {
         VStack(spacing: 0) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(20)
-                .id(tick)
+            ZStack {
+                content
+                    .id(step)
+                    .transition(stepTransition)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(20)
+            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: step)
             Divider()
             footer.padding(.horizontal, 18).padding(.vertical, 12)
         }
-        .frame(width: 360, height: 420)
-        // Re-check permissions whenever the window regains focus.
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in tick.toggle() }
+        .frame(width: 360, height: 440)
+        .onAppear {
+            // Live-poll so rows flip to "granted" the moment the user acts in
+            // System Settings or a consent dialog — no window focus needed.
+            refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+                Task { @MainActor in snapshot = Permissions.snapshot() }
+            }
+        }
+        .onDisappear { refreshTimer?.invalidate() }
+    }
+
+    private var stepTransition: AnyTransition {
+        .asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .trailing)),
+            removal: .opacity.combined(with: .move(edge: .leading))
+        )
     }
 
     // MARK: Steps
@@ -63,57 +87,8 @@ struct OnboardingView: View {
             page(icon: "rectangle.topthird.inset.filled",
                  title: "Your Mac's notch",
                  body: "Notch adds a dynamic island to the top of your screen — music controls, a screenshot tray, and clipboard history.\n\nA few macOS permissions make it work. Let's set them up.")
-        case .accessibility:
-            permissionPage(
-                icon: "accessibility",
-                title: "Accessibility",
-                body: "Lets Notch sit above other windows and respond to your interactions reliably.",
-                granted: Permissions.accessibilityTrusted,
-                primaryTitle: "Request access",
-                primary: { Permissions.requestAccessibility() },
-                openSettings: { Permissions.openAccessibilitySettings() })
-        case .spotify:
-            permissionPage(
-                icon: "music.note",
-                title: "Control Spotify",
-                body: SpotifyBridge.isRunning
-                    ? "Lets Notch read the current song and skip / pause from the notch. macOS will ask once — choose “OK”."
-                    : "Open the Spotify desktop app first, then come back here and click below to connect.",
-                granted: Permissions.spotifyControllable,
-                primaryTitle: SpotifyBridge.isRunning ? "Connect Spotify" : "Waiting for Spotify…",
-                primary: { Permissions.requestSpotifyAutomation() },
-                primaryDisabled: !SpotifyBridge.isRunning,
-                openSettings: { Permissions.openAutomationSettings() })
-        case .screenshots:
-            VStack(spacing: 12) {
-                Spacer()
-                Image(systemName: "camera.viewfinder").font(.system(size: 36)).foregroundStyle(.tint)
-                Text("Screenshots").font(.title3.bold())
-                Text("New screenshots pop into the notch, ready to drag anywhere.")
-                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                if settings.routeScreenshotsToFolder {
-                    Label("Saving to Pictures › Screenshots", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green).font(.headline)
-                } else if Permissions.probeScreenshotFolderAccess() {
-                    Label("Desktop access granted", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green).font(.headline)
-                } else {
-                    Button("Use a tidy Screenshots folder") {
-                        settings.routeScreenshotsToFolder = true
-                        tick.toggle()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Text("Recommended — saves to ~/Pictures/Screenshots. No permission needed.")
-                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("Keep saving to the Desktop instead") {
-                        Permissions.probeScreenshotFolderAccess()   // triggers the Desktop-access prompt
-                        tick.toggle()
-                    }
-                    .buttonStyle(.link).font(.callout)
-                }
-                Spacer()
-            }
+        case .permissions:
+            permissionsStep
         case .library:
             VStack(spacing: 12) {
                 Spacer()
@@ -138,6 +113,96 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: Permissions step (one page, live-updating rows)
+
+    private var permissionsStep: some View {
+        VStack(spacing: 12) {
+            VStack(spacing: 6) {
+                Image(systemName: "lock.shield").font(.system(size: 30)).foregroundStyle(.tint)
+                Text("Permissions").font(.title3.bold())
+                Text("Notch guides you through each one — click Grant and follow along.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+
+            permissionRow(
+                title: "Accessibility",
+                explainer: "Keeps the notch above other windows and interactive.",
+                granted: snapshot.accessibility == .granted) {
+                Button("Grant") { requestAndRefresh(.accessibility) }
+                    .buttonStyle(.bordered).controlSize(.small)
+            }
+
+            permissionRow(
+                title: "Control Spotify",
+                explainer: snapshot.spotifyRunning
+                    ? "Show the current song and skip / pause from the notch."
+                    : "Open the Spotify app first, then connect from here.",
+                granted: snapshot.automation == .granted) {
+                if snapshot.spotifyRunning {
+                    Button("Connect") { requestAndRefresh(.automation) }
+                        .buttonStyle(.bordered).controlSize(.small)
+                } else {
+                    Button("Open Spotify", action: launchSpotify)
+                        .buttonStyle(.bordered).controlSize(.small)
+                }
+            }
+
+            permissionRow(
+                title: "Screenshots",
+                explainer: settings.routeScreenshotsToFolder
+                    ? "Saving to Pictures › Screenshots."
+                    : "New screenshots pop into the notch's tray.",
+                granted: settings.routeScreenshotsToFolder || snapshot.screenshots == .granted) {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Button("Use folder") { settings.routeScreenshotsToFolder = true }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .help("Recommended — saves to ~/Pictures/Screenshots. No permission needed.")
+                    Button("Keep Desktop") { requestAndRefresh(.filesAndFolders) }
+                        .buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary)
+                        .help("Keep saving to the Desktop — needs folder access.")
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if snapshot.accessibility != .granted {
+                Text("Accessibility is required — the rest can wait.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func permissionRow<Actions: View>(
+        title: String, explainer: String, granted: Bool,
+        @ViewBuilder actions: () -> Actions
+    ) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "circle.dashed")
+                .foregroundStyle(granted ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.medium))
+                Text(explainer).font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            if !granted { actions() }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func requestAndRefresh(_ prompt: PermissionPrompt) {
+        PermissionPromptAssistant.shared.request(prompt)
+        snapshot = Permissions.snapshot()
+    }
+
+    private func launchSpotify() {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: SpotifyBridge.bundleID) else { return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+    }
+
     private func page(icon: String, title: String, body: String) -> some View {
         VStack(spacing: 12) {
             Spacer()
@@ -149,47 +214,30 @@ struct OnboardingView: View {
         }
     }
 
-    private func permissionPage(icon: String, title: String, body: String, granted: Bool,
-                                primaryTitle: String, primary: @escaping () -> Void,
-                                primaryDisabled: Bool = false,
-                                openSettings: @escaping () -> Void) -> some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: icon).font(.system(size: 36)).foregroundStyle(.tint)
-            Text(title).font(.title3.bold())
-            Text(body).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if granted {
-                Label("Granted", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green).font(.headline)
-            } else {
-                Button(primaryTitle) { primary(); tick.toggle() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(primaryDisabled)
-                Button("Open System Settings", action: openSettings)
-                    .buttonStyle(.link).font(.callout)
-            }
-            Spacer()
-        }
-    }
-
     // MARK: Footer
 
     private var footer: some View {
-        HStack {
-            if step != .welcome {
-                Button("Back") { move(-1) }
+        VStack(spacing: 10) {
+            HStack(spacing: 6) {
+                ForEach(Step.allCases, id: \.self) { s in
+                    Capsule()
+                        .fill(s == step ? Color.accentColor : Color.secondary.opacity(0.25))
+                        .frame(width: s == step ? 16 : 6, height: 6)
+                        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: step)
+                }
             }
-            Spacer()
-            Text("\(step.rawValue + 1) / \(Step.allCases.count)")
-                .font(.caption).foregroundStyle(.tertiary)
-            Spacer()
-            if step == .done {
-                Button("Finish") { finish() }.buttonStyle(.borderedProminent)
-            } else {
-                Button(nextTitle) { move(1) }
-                    .buttonStyle(.borderedProminent)
+            HStack {
+                if step != .welcome {
+                    Button("Back") { move(-1) }
+                }
+                Spacer()
+                if step == .done {
+                    Button("Finish") { finish() }.buttonStyle(.borderedProminent)
+                } else {
+                    Button(nextTitle) { move(1) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(nextDisabled)
+                }
             }
         }
     }
@@ -202,7 +250,12 @@ struct OnboardingView: View {
         }
     }
 
+    private var nextDisabled: Bool {
+        step == .permissions && !snapshot.allRequiredGranted
+    }
+
     private func move(_ delta: Int) {
+        if step == .permissions { PermissionPromptAssistant.shared.dismiss() }
         let next = max(0, min(Step.allCases.count - 1, step.rawValue + delta))
         withAnimation { step = Step(rawValue: next) ?? step }
     }
