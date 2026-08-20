@@ -17,6 +17,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.title = "Notch Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.center()
         self.init(window: window)
         window.delegate = self

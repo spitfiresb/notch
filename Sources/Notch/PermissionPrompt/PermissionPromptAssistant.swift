@@ -61,7 +61,10 @@ final class PermissionPromptAssistant {
         Task { @MainActor in
             fire()  // blocks until the user answers the consent dialog
             try? await Task.sleep(nanoseconds: 250_000_000)
-            NSApp.activate(ignoringOtherApps: true)
+            // Re-key our window only if Notch is still the active app. If the
+            // consent dialog handed focus elsewhere (System Settings, say),
+            // stealing it back on every click is worse than staying behind.
+            guard NSApp.isActive else { return }
             if let window = windowToRefocus, window.isVisible {
                 window.makeKeyAndOrderFront(nil)
             }
