@@ -13,7 +13,11 @@ import SwiftUI
 /// each playlist's `snapshot_id`, so the per-track lookup is instant and offline.
 @MainActor
 final class SpotifyLibrary: ObservableObject {
-    static let clientID = "0660987f9ffe42c8bfd78a6325a15ebf"
+    /// The maintainer's Spotify app. It's in Development mode, so only
+    /// allowlisted Spotify accounts can log in through it — everyone else
+    /// brings their own client ID (Settings → Spotify).
+    static let defaultClientID = "0660987f9ffe42c8bfd78a6325a15ebf"
+    private static let customClientIDKey = "spotify.customClientID"
     static let redirectURI = "http://127.0.0.1:8888/callback"
     static let loopbackPort: UInt16 = 8888
     static let scopes = "user-library-read user-library-modify playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private"
@@ -48,6 +52,24 @@ final class SpotifyLibrary: ObservableObject {
     @Published private(set) var membership = Membership()
     /// Every writable playlist, index order (roughly most-recent-first from Spotify).
     @Published private(set) var allPlaylists: [PlaylistRef] = []
+    /// User-supplied client ID for a bring-your-own Spotify developer app.
+    /// Empty = use the built-in default.
+    @Published private(set) var customClientID =
+        UserDefaults.standard.string(forKey: SpotifyLibrary.customClientIDKey) ?? ""
+
+    private var clientID: String { customClientID.isEmpty ? Self.defaultClientID : customClientID }
+
+    /// Set (empty string = clear) the user's own client ID. Tokens aren't valid
+    /// across Spotify apps, so any change tears down the current login and the
+    /// cached library index; the user reconnects under the new app.
+    func setCustomClientID(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != customClientID else { return }
+        customClientID = trimmed
+        UserDefaults.standard.set(trimmed, forKey: Self.customClientIDKey)
+        notchLog("spotify: client ID changed to \(trimmed.isEmpty ? "built-in" : "custom") — disconnecting")
+        disconnect()
+    }
 
     private struct PlaylistEntry: Codable {
         let id: String
@@ -143,7 +165,7 @@ final class SpotifyLibrary: ObservableObject {
 
         var comps = URLComponents(string: "https://accounts.spotify.com/authorize")!
         comps.queryItems = [
-            .init(name: "client_id", value: Self.clientID),
+            .init(name: "client_id", value: clientID),
             .init(name: "response_type", value: "code"),
             .init(name: "redirect_uri", value: Self.redirectURI),
             .init(name: "scope", value: Self.scopes),
@@ -178,7 +200,7 @@ final class SpotifyLibrary: ObservableObject {
                     "grant_type": "authorization_code",
                     "code": code,
                     "redirect_uri": Self.redirectURI,
-                    "client_id": Self.clientID,
+                    "client_id": clientID,
                     "code_verifier": verifier,
                 ])
                 accessToken = token.access_token
@@ -448,7 +470,7 @@ final class SpotifyLibrary: ObservableObject {
             let token = try await tokenRequest(form: [
                 "grant_type": "refresh_token",
                 "refresh_token": refresh,
-                "client_id": Self.clientID,
+                "client_id": clientID,
             ])
             accessToken = token.access_token
             accessExpiry = Date().addingTimeInterval(token.expires_in - 30)
