@@ -26,6 +26,6 @@ case "${1:-build}" in
     run)    assemble; kill_app; sleep 0.3; open "${APP}"; echo "→ launched (no Dock icon — look at the notch)";;
     clean)  rm -rf .build build; echo "→ cleaned" ;;
     kill)   kill_app; echo "→ killed ${APP_NAME}" ;;
-    logs)   log stream --predicate "process == \"${APP_NAME}\"" --level debug ;;
+    logs)   tail -F "${HOME}/Library/Logs/Notch/notch.log" ;;   # notchLog writes here (NSLog doesn't reach unified log from a SwiftPM binary)
     *)      echo "usage: ./build.sh [build|run|clean|kill|logs]   (CONFIG=release for optimized)"; exit 1 ;;
 esac

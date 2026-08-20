@@ -10,7 +10,7 @@ This is a plain Swift Package — **no Xcode project**. Everything goes through 
 | `./build.sh run`   | Compile, kill any running copy, and launch the app |
 | `./build.sh kill`  | Quit the running app |
 | `./build.sh clean` | Remove `.build/` and `build/` |
-| `./build.sh logs`  | Tail the app's `os_log` output |
+| `./build.sh logs`  | Tail the app's log file (`~/Library/Logs/Notch/notch.log`) |
 
 Add `CONFIG=release` for an optimized build, e.g. `CONFIG=release ./build.sh run`.
 
@@ -59,4 +59,4 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
 - `Services/TrackpadGestureMonitor.swift` — tracks live trackpad gestures so Space swipes aren't fought.
 - `Services/Permissions.swift` — TCC checks + System Settings deep links used by onboarding.
 - `Services/SettingsStore.swift` — persisted user preferences.
-- `Services/DebugLog.swift` — `notchLog` helper for `os_log` output (`./build.sh logs`).
+- `Services/DebugLog.swift` — `notchLog` helper; writes `~/Library/Logs/Notch/notch.log` (`./build.sh logs`).
