@@ -31,20 +31,22 @@ remaining. See `BUILD.md` for the day-to-day build workflow.
 
 ### 1. Spotify: bring-your-own client ID
 
-- [ ] Make `SpotifyLibrary.clientID` a settings-backed value (via
-      `SettingsStore`), defaulting to the current hardcoded ID so the
+- [x] Make the client ID a settings-backed value (UserDefaults-persisted on
+      `SpotifyLibrary`), defaulting to the current hardcoded ID so the
       maintainer's build behaves exactly as today.
-- [ ] Settings: Spotify section with client ID field, connection status,
-      disconnect button.
-- [ ] In-app walkthrough for new users: create an app at
-      developer.spotify.com → set redirect URI to
-      `http://127.0.0.1:8888/callback` → paste client ID → connect. Surface it
-      when auth 403s or no ID is configured.
-- [ ] Degraded mode: the saved-in panel shows the setup prompt instead of
-      erroring when unauthenticated. Now-playing / playback control (Apple
-      Events) works regardless — no Web API needed.
-- [ ] Changing the client ID clears the keychain refresh token (tokens are
-      not valid across Spotify apps).
+- [x] Settings: Spotify section gained a "Use your own Spotify app" area with
+      the three-step walkthrough (create app → set redirect URI → paste
+      client ID) and an Apply field; status/disconnect already existed.
+- [x] 403s point at the walkthrough: both the Settings caption and the
+      saved-in panel's denied message send the user to Settings → Spotify.
+- [x] Degraded mode: the saved-in panel already showed a Connect prompt when
+      unauthenticated; now-playing / playback control (Apple Events) works
+      regardless — no Web API needed.
+- [x] Changing the client ID disconnects: clears the keychain refresh token
+      and the cached library index (tokens aren't valid across Spotify apps).
+- [x] Onboarding frames it as an add-on: core setup (accessibility, Spotify
+      control, screenshots) first, then an optional "Spotify Library" step —
+      connect via Settings or Skip; everything else works without it.
 
 ### 2. Release build & packaging
 

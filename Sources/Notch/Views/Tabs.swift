@@ -283,7 +283,7 @@ private struct SavedInPanel: View {
             .frame(maxHeight: .infinity)
         case .connected:
             if spotify.accessDenied {
-                statusLine("Spotify denied access (403) — the logged-in Spotify account must be added under User Management on the developer dashboard.")
+                statusLine("Spotify denied access (403) — your account isn't allowlisted for this app. Set up your own Spotify app in Settings → Spotify.")
             } else if spotify.membership.trackID == nil {
                 statusLine("This track isn't playing from Spotify.")
             } else if !spotify.membership.hasAny {

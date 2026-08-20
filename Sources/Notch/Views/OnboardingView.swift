@@ -6,30 +6,34 @@ import SwiftUI
 final class OnboardingWindowController: NSWindowController {
     private let onFinish: () -> Void
 
-    init(onFinish: @escaping () -> Void) {
+    init(spotify: SpotifyLibrary, openSettings: @escaping () -> Void, onFinish: @escaping () -> Void) {
         self.onFinish = onFinish
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 420),
                               styleMask: [.titled, .closable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.title = "Welcome to Notch"
+        window.appearance = NSAppearance(named: .darkAqua)
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.center()
         super.init(window: window)
-        window.contentViewController = NSHostingController(rootView: OnboardingView { [weak self] in
-            self?.close()
-            self?.onFinish()
-        })
+        window.contentViewController = NSHostingController(
+            rootView: OnboardingView(spotify: spotify, openSettings: openSettings) { [weak self] in
+                self?.close()
+                self?.onFinish()
+            })
     }
 
     required init?(coder: NSCoder) { fatalError() }
 }
 
 private enum Step: Int, CaseIterable {
-    case welcome, accessibility, spotify, screenshots, done
+    case welcome, accessibility, spotify, screenshots, library, done
 }
 
 struct OnboardingView: View {
+    @ObservedObject var spotify: SpotifyLibrary
+    let openSettings: () -> Void
     let finish: () -> Void
     @State private var step: Step = .welcome
     @State private var tick = false   // toggled to re-check live permission state
@@ -38,12 +42,12 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(28)
+                .padding(20)
                 .id(tick)
             Divider()
-            footer.padding(.horizontal, 24).padding(.vertical, 14)
+            footer.padding(.horizontal, 18).padding(.vertical, 12)
         }
-        .frame(width: 480, height: 560)
+        .frame(width: 360, height: 420)
         // Re-check permissions whenever the window regains focus.
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in tick.toggle() }
     }
@@ -86,6 +90,23 @@ struct OnboardingView: View {
                 primaryTitle: "Grant access",
                 primary: { Permissions.probeScreenshotFolderAccess() },
                 openSettings: { Permissions.openFilesAndFoldersSettings() })
+        case .library:
+            VStack(spacing: 12) {
+                Spacer()
+                Image(systemName: "heart.text.square").font(.system(size: 36)).foregroundStyle(.tint)
+                Text("Spotify Library").font(.title3.bold())
+                Text("Optional: see whether the current song is Liked and which playlists it's in, and add or remove it from the notch.\n\nNeeds a Spotify login and a free developer app of your own — Settings walks you through it. Skip this and everything else still works.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                if spotify.state == .connected {
+                    Label("Connected", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green).font(.headline)
+                } else {
+                    Button("Set up Spotify Library…") { openSettings() }
+                        .buttonStyle(.borderedProminent)
+                }
+                Spacer()
+            }
         case .done:
             page(icon: "checkmark.circle.fill",
                  title: "All set",
@@ -94,11 +115,11 @@ struct OnboardingView: View {
     }
 
     private func page(icon: String, title: String, body: String) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Spacer()
-            Image(systemName: icon).font(.system(size: 52)).foregroundStyle(.tint)
-            Text(title).font(.title.bold())
-            Text(body).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: icon).font(.system(size: 40)).foregroundStyle(.tint)
+            Text(title).font(.title2.bold())
+            Text(body).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
@@ -108,11 +129,11 @@ struct OnboardingView: View {
                                 primaryTitle: String, primary: @escaping () -> Void,
                                 primaryDisabled: Bool = false,
                                 openSettings: @escaping () -> Void) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Spacer()
-            Image(systemName: icon).font(.system(size: 48)).foregroundStyle(.tint)
-            Text(title).font(.title2.bold())
-            Text(body).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: icon).font(.system(size: 36)).foregroundStyle(.tint)
+            Text(title).font(.title3.bold())
+            Text(body).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
             if granted {
@@ -143,9 +164,17 @@ struct OnboardingView: View {
             if step == .done {
                 Button("Finish") { finish() }.buttonStyle(.borderedProminent)
             } else {
-                Button(step == .welcome ? "Get started" : "Next") { move(1) }
+                Button(nextTitle) { move(1) }
                     .buttonStyle(.borderedProminent)
             }
+        }
+    }
+
+    private var nextTitle: String {
+        switch step {
+        case .welcome: return "Get started"
+        case .library: return spotify.state == .connected ? "Next" : "Skip"
+        default:       return "Next"
         }
     }
 
