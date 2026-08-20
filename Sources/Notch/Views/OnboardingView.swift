@@ -15,6 +15,9 @@ final class OnboardingWindowController: NSWindowController {
         window.title = "Welcome to Notch"
         window.appearance = NSAppearance(named: .darkAqua)
         window.titlebarAppearsTransparent = true
+        // Follow the user: open on whatever Space is active, not the Space
+        // that happened to be frontmost at app launch.
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.isMovableByWindowBackground = true
         window.center()
         super.init(window: window)
