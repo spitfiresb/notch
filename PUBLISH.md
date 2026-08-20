@@ -44,6 +44,9 @@ remaining. See `BUILD.md` for the day-to-day build workflow.
       regardless — no Web API needed.
 - [x] Changing the client ID disconnects: clears the keychain refresh token
       and the cached library index (tokens aren't valid across Spotify apps).
+- [x] Onboarding frames it as an add-on: core setup (accessibility, Spotify
+      control, screenshots) first, then an optional "Spotify Library" step —
+      connect via Settings or Skip; everything else works without it.
 
 ### 2. Release build & packaging
 

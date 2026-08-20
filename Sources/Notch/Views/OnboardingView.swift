@@ -6,7 +6,7 @@ import SwiftUI
 final class OnboardingWindowController: NSWindowController {
     private let onFinish: () -> Void
 
-    init(onFinish: @escaping () -> Void) {
+    init(spotify: SpotifyLibrary, openSettings: @escaping () -> Void, onFinish: @escaping () -> Void) {
         self.onFinish = onFinish
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
                               styleMask: [.titled, .closable, .fullSizeContentView],
@@ -16,20 +16,23 @@ final class OnboardingWindowController: NSWindowController {
         window.isMovableByWindowBackground = true
         window.center()
         super.init(window: window)
-        window.contentViewController = NSHostingController(rootView: OnboardingView { [weak self] in
-            self?.close()
-            self?.onFinish()
-        })
+        window.contentViewController = NSHostingController(
+            rootView: OnboardingView(spotify: spotify, openSettings: openSettings) { [weak self] in
+                self?.close()
+                self?.onFinish()
+            })
     }
 
     required init?(coder: NSCoder) { fatalError() }
 }
 
 private enum Step: Int, CaseIterable {
-    case welcome, accessibility, spotify, screenshots, done
+    case welcome, accessibility, spotify, screenshots, library, done
 }
 
 struct OnboardingView: View {
+    @ObservedObject var spotify: SpotifyLibrary
+    let openSettings: () -> Void
     let finish: () -> Void
     @State private var step: Step = .welcome
     @State private var tick = false   // toggled to re-check live permission state
@@ -86,6 +89,23 @@ struct OnboardingView: View {
                 primaryTitle: "Grant access",
                 primary: { Permissions.probeScreenshotFolderAccess() },
                 openSettings: { Permissions.openFilesAndFoldersSettings() })
+        case .library:
+            VStack(spacing: 16) {
+                Spacer()
+                Image(systemName: "heart.text.square").font(.system(size: 48)).foregroundStyle(.tint)
+                Text("Spotify Library").font(.title2.bold())
+                Text("Optional add-on: see whether the current song is Liked and which of your playlists it's saved in — and add or remove it right from the notch.\n\nIt needs a Spotify login (and a free Spotify developer app of your own; Settings walks you through it). Skip this and everything else still works — you can set it up any time from Settings → Spotify.")
+                    .font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                if spotify.state == .connected {
+                    Label("Connected", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green).font(.headline)
+                } else {
+                    Button("Set up Spotify Library…") { openSettings() }
+                        .buttonStyle(.borderedProminent)
+                }
+                Spacer()
+            }
         case .done:
             page(icon: "checkmark.circle.fill",
                  title: "All set",
@@ -143,9 +163,17 @@ struct OnboardingView: View {
             if step == .done {
                 Button("Finish") { finish() }.buttonStyle(.borderedProminent)
             } else {
-                Button(step == .welcome ? "Get started" : "Next") { move(1) }
+                Button(nextTitle) { move(1) }
                     .buttonStyle(.borderedProminent)
             }
+        }
+    }
+
+    private var nextTitle: String {
+        switch step {
+        case .welcome: return "Get started"
+        case .library: return spotify.state == .connected ? "Next" : "Skip"
+        default:       return "Next"
         }
     }
 
