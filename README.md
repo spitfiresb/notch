@@ -110,7 +110,7 @@ Sources/Notch/
     ├── TrackpadGestureMonitor.swift   Live-gesture detection
     ├── Permissions.swift              TCC checks & System Settings deep links
     ├── SettingsStore.swift            Persisted preferences
-    └── DebugLog.swift                 os_log helper (./build.sh logs)
+    └── DebugLog.swift                 log-file helper (./build.sh logs)
 ```
 
 A more detailed map lives in [BUILD.md](BUILD.md).

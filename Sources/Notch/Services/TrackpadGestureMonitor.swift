@@ -72,9 +72,6 @@ final class TrackpadGestureMonitor {
     private var inGesture = false
     private var startX: CGFloat = 0
     private var startY: CGFloat = 0
-    private var lastLoggedCount: Int = -1
-    private var frameCount: Int = 0
-
     private init() {}
 
     func start() {
@@ -90,11 +87,6 @@ final class TrackpadGestureMonitor {
     }
 
     fileprivate func process(fingerCount: Int, avgX: CGFloat, avgY: CGFloat) {
-        frameCount += 1
-        if fingerCount != lastLoggedCount {
-            notchLog("[mt] count \(lastLoggedCount) -> \(fingerCount) x=\(String(format: "%.3f", Double(avgX))) y=\(String(format: "%.3f", Double(avgY))) totalFrames=\(frameCount)")
-            lastLoggedCount = fingerCount
-        }
         if fingerCount >= 3 {
             if !inGesture {
                 inGesture = true
