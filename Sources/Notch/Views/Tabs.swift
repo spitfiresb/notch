@@ -253,12 +253,20 @@ private struct SavedInPanel: View {
         switch spotify.state {
         case .disconnected:
             HStack(spacing: 8) {
-                Text("Connect Spotify to see where this song is saved.")
+                Text(spotify.hasClientID
+                     ? "Connect Spotify to see where this song is saved."
+                     : "Set up Spotify in Settings to see where this song is saved.")
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.55))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                Button("Connect") { spotify.connect() }
+                Button(spotify.hasClientID ? "Connect" : "Set Up…") {
+                    if spotify.hasClientID {
+                        spotify.connect()
+                    } else {
+                        AppDelegate.shared?.showSettingsWindow()
+                    }
+                }
                     .buttonStyle(.plain)
                     .font(.system(size: 10, weight: .semibold))
                     .padding(.horizontal, 9).padding(.vertical, 4)

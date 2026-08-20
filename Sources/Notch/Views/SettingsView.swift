@@ -82,26 +82,41 @@ struct SettingsView: View {
                         Button("Sync Now") { Task { await spotify.sync(force: true) } }
                             .disabled(spotify.isSyncing)
                         Button("Disconnect") { spotify.disconnect() }
-                    } else {
+                    } else if spotify.hasClientID {
                         Button(spotify.state == .connecting ? "Retry Login…" : "Connect…") {
                             spotify.connect()
                         }
                     }
                 }
+                if spotify.state == .connecting {
+                    Text("Finish logging in in your browser. If nothing happens, check that your Spotify app's redirect URI is exactly \(SpotifyLibrary.redirectURI).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Use your own Spotify app")
+                    Text("Set up your Spotify app")
                     Text("""
-                    Spotify limits third-party apps to a handful of users, so Notch works with \
-                    a Spotify app you own (free, needs Spotify Premium):
-                    1. On developer.spotify.com/dashboard, create an app.
-                    2. Set its Redirect URI to \(SpotifyLibrary.redirectURI) (Web API).
+                    Spotify limits third-party apps to a handful of users, so Notch connects \
+                    through a Spotify app you own (free, needs Spotify Premium):
+                    1. On the Spotify dashboard, create an app.
+                    2. Set its Redirect URI to the address below (Web API).
                     3. Paste its Client ID here, apply, then Connect above.
                     Applying a change signs you out so you can reconnect under the new app.
                     """)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Button("Open Spotify Dashboard") {
+                            NSWorkspace.shared.open(URL(string: "https://developer.spotify.com/dashboard")!)
+                        }
+                        Button("Copy Redirect URI") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(SpotifyLibrary.redirectURI, forType: .string)
+                        }
+                        .help(SpotifyLibrary.redirectURI)
+                    }
                     HStack {
-                        TextField("Client ID (leave blank for the built-in app)", text: $clientIDDraft)
+                        TextField("Client ID", text: $clientIDDraft)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.caption, design: .monospaced))
                             .autocorrectionDisabled()
@@ -126,7 +141,8 @@ struct SettingsView: View {
             if spotify.isSyncing { return "Connected · syncing playlists…" }
             return "Connected · \(spotify.playlistCount) playlists indexed"
         case .connecting:    return "Connecting to Spotify…"
-        case .disconnected:  return "Spotify account"
+        case .disconnected:  return spotify.hasClientID ? "Spotify account"
+                                                        : "Spotify account · setup needed below"
         }
     }
 }

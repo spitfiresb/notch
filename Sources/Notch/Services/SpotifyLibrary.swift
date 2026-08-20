@@ -59,6 +59,11 @@ final class SpotifyLibrary: ObservableObject {
 
     private var clientID: String { customClientID.isEmpty ? Self.defaultClientID : customClientID }
 
+    /// True once the user has supplied their own client ID. The built-in default
+    /// only works for accounts allowlisted on the maintainer's app, so UI treats
+    /// "no custom ID" as "setup required" rather than offering a doomed login.
+    var hasClientID: Bool { !customClientID.isEmpty }
+
     /// Set (empty string = clear) the user's own client ID. Tokens aren't valid
     /// across Spotify apps, so any change tears down the current login and the
     /// cached library index; the user reconnects under the new app.
@@ -144,6 +149,10 @@ final class SpotifyLibrary: ObservableObject {
     /// Safe to call again mid-login — a previous stalled attempt (closed browser
     /// tab, bad redirect config) is torn down and a fresh one starts.
     func connect() {
+        guard hasClientID else {
+            notchLog("spotify: connect() without a client ID — setup required first")
+            return
+        }
         loginTimeout?.cancel(); loginTimeout = nil
         state = .connecting
         let verifier = Self.randomURLSafe(64)
