@@ -12,9 +12,10 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(copyScreenshotToClipboard, forKey: Keys.copyScreenshot) }
     }
 
-    /// Auto-route screenshots into `~/Desktop/Screenshots` instead of the bare Desktop,
-    /// managed via the system `com.apple.screencapture.location` preference. Flipping
-    /// this off restores macOS's default Desktop location.
+    /// Auto-route screenshots into `~/Pictures/Screenshots` instead of the Desktop,
+    /// managed via the system `com.apple.screencapture.location` preference. Pictures
+    /// isn't TCC-protected, so this needs no folder permission — unlike watching the
+    /// Desktop. Flipping this off restores macOS's default Desktop location.
     @Published var routeScreenshotsToFolder: Bool {
         didSet { Self.applyScreenshotRouting(enabled: routeScreenshotsToFolder) }
     }
@@ -33,7 +34,7 @@ final class SettingsStore: ObservableObject {
 
     /// The managed folder we point macOS at when routing is enabled.
     static var managedScreenshotURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop/Screenshots")
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures/Screenshots")
     }
 
     init() {

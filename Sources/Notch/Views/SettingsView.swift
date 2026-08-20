@@ -6,6 +6,8 @@ struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var spotify: SpotifyLibrary
     @State private var clientIDDraft = ""
+    @State private var showCleanupConfirm = false
+    @State private var pendingCleanupCount = 0
 
     var body: some View {
         Form {
@@ -25,7 +27,7 @@ struct SettingsView: View {
                 Toggle(isOn: $settings.routeScreenshotsToFolder) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Save screenshots to a Screenshots folder")
-                        Text("Routes captures into ~/Desktop/Screenshots so your Desktop stays clean.")
+                        Text("Routes captures into ~/Pictures/Screenshots — keeps your Desktop clean, no folder permission needed.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -36,6 +38,30 @@ struct SettingsView: View {
                         Text("Paste a screenshot the moment you've taken it.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Clean up screenshots")
+                        Text("Moves every screenshot in the current folder to the Trash.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Clean Up…") {
+                        pendingCleanupCount = ScreenshotWatcher.screenshotsInCurrentFolder().count
+                        showCleanupConfirm = pendingCleanupCount > 0
+                    }
+                    .confirmationDialog(
+                        "Move \(pendingCleanupCount) screenshot\(pendingCleanupCount == 1 ? "" : "s") to the Trash?",
+                        isPresented: $showCleanupConfirm, titleVisibility: .visible
+                    ) {
+                        Button("Move to Trash", role: .destructive) {
+                            _ = ScreenshotWatcher.trashAllScreenshots()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Only files macOS created as screenshots are touched. You can restore them from the Trash.")
                     }
                 }
             } header: {
