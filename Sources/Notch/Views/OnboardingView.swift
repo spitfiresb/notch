@@ -8,10 +8,11 @@ final class OnboardingWindowController: NSWindowController {
 
     init(spotify: SpotifyLibrary, openSettings: @escaping () -> Void, onFinish: @escaping () -> Void) {
         self.onFinish = onFinish
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 420),
                               styleMask: [.titled, .closable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.title = "Welcome to Notch"
+        window.appearance = NSAppearance(named: .darkAqua)
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.center()
@@ -41,12 +42,12 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(28)
+                .padding(20)
                 .id(tick)
             Divider()
-            footer.padding(.horizontal, 24).padding(.vertical, 14)
+            footer.padding(.horizontal, 18).padding(.vertical, 12)
         }
-        .frame(width: 480, height: 560)
+        .frame(width: 360, height: 420)
         // Re-check permissions whenever the window regains focus.
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in tick.toggle() }
     }
@@ -90,12 +91,12 @@ struct OnboardingView: View {
                 primary: { Permissions.probeScreenshotFolderAccess() },
                 openSettings: { Permissions.openFilesAndFoldersSettings() })
         case .library:
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 Spacer()
-                Image(systemName: "heart.text.square").font(.system(size: 48)).foregroundStyle(.tint)
-                Text("Spotify Library").font(.title2.bold())
-                Text("Optional add-on: see whether the current song is Liked and which of your playlists it's saved in — and add or remove it right from the notch.\n\nIt needs a Spotify login (and a free Spotify developer app of your own; Settings walks you through it). Skip this and everything else still works — you can set it up any time from Settings → Spotify.")
-                    .font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Image(systemName: "heart.text.square").font(.system(size: 36)).foregroundStyle(.tint)
+                Text("Spotify Library").font(.title3.bold())
+                Text("Optional: see whether the current song is Liked and which playlists it's in, and add or remove it from the notch.\n\nNeeds a Spotify login and a free developer app of your own — Settings walks you through it. Skip this and everything else still works.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 if spotify.state == .connected {
                     Label("Connected", systemImage: "checkmark.circle.fill")
@@ -114,11 +115,11 @@ struct OnboardingView: View {
     }
 
     private func page(icon: String, title: String, body: String) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Spacer()
-            Image(systemName: icon).font(.system(size: 52)).foregroundStyle(.tint)
-            Text(title).font(.title.bold())
-            Text(body).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: icon).font(.system(size: 40)).foregroundStyle(.tint)
+            Text(title).font(.title2.bold())
+            Text(body).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
@@ -128,11 +129,11 @@ struct OnboardingView: View {
                                 primaryTitle: String, primary: @escaping () -> Void,
                                 primaryDisabled: Bool = false,
                                 openSettings: @escaping () -> Void) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Spacer()
-            Image(systemName: icon).font(.system(size: 48)).foregroundStyle(.tint)
-            Text(title).font(.title2.bold())
-            Text(body).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: icon).font(.system(size: 36)).foregroundStyle(.tint)
+            Text(title).font(.title3.bold())
+            Text(body).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
             if granted {
