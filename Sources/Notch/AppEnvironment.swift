@@ -92,7 +92,7 @@ struct SessionToast: Equatable {
     var message: String {
         let name = session.projectName
         let shown = name.count > 14 ? String(name.prefix(13)) + "…" : name
-        return "\(shown) Claude session finished"
+        return "/\(shown) claude session finished"
     }
 }
 

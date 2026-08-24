@@ -87,7 +87,7 @@ struct SessionToastView: View {
     var body: some View {
         HStack(spacing: 9) {
             CascadeText(text: toast.message, startDelay: Self.lead, perChar: Self.perChar)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .kerning(-0.1)
                 .foregroundStyle(.white)
             CircleCheckmark(delay: Self.lead + Double(toast.message.count) * Self.perChar + 0.04)
