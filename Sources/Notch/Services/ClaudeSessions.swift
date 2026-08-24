@@ -335,10 +335,10 @@ final class ClaudeSessionStore: ObservableObject {
 
     // MARK: Focus
 
-    /// Bring the terminal window hosting this session to the front.
-    /// Terminal.app / iTerm2 are matched by tty; anything else (VS Code, Cursor,
-    /// Warp, Ghostty…) activates the hosting app and tries to raise the window
-    /// whose title mentions the project folder.
+    /// Bring the terminal window hosting this session to the front. Supported
+    /// hosts: Terminal.app (tab matched by tty) and VS Code (activate, then
+    /// raise the window whose title mentions the project folder). Anything
+    /// else just gets its app activated.
     func focus(_ session: ClaudeSession) {
         guard let pid = session.pid,
               let host = Proc.hostApplication(of: pid) else { return }
@@ -346,49 +346,26 @@ final class ClaudeSessionStore: ObservableObject {
         let ttyPath = session.tty.map { "/dev/\($0)" }
         notchLog("claude-sessions: focus \(session.projectName) host=\(bundle) tty=\(ttyPath ?? "-")")
 
-        var handled = false
-        if let ttyPath {
-            switch bundle {
-            case "com.apple.Terminal":
-                handled = AppleScript.run("""
-                    tell application "Terminal"
-                        repeat with w in windows
-                            repeat with t in tabs of w
-                                if tty of t is "\(ttyPath)" then
-                                    set selected tab of w to t
-                                    set index of w to 1
-                                    activate
-                                    return true
-                                end if
-                            end repeat
+        if bundle == "com.apple.Terminal", let ttyPath {
+            let hit = AppleScript.run("""
+                tell application "Terminal"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            if tty of t is "\(ttyPath)" then
+                                set selected tab of w to t
+                                set index of w to 1
+                                activate
+                                return true
+                            end if
                         end repeat
-                    end tell
-                    return false
-                    """) == "true"
-            case "com.googlecode.iterm2":
-                handled = AppleScript.run("""
-                    tell application "iTerm2"
-                        repeat with w in windows
-                            repeat with t in tabs of w
-                                repeat with s in sessions of t
-                                    if tty of s is "\(ttyPath)" then
-                                        select s
-                                        select t
-                                        select w
-                                        activate
-                                        return true
-                                    end if
-                                end repeat
-                            end repeat
-                        end repeat
-                    end tell
-                    return false
-                    """) == "true"
-            default: break
-            }
+                    end repeat
+                end tell
+                return false
+                """) == "true"
+            if hit { return }
         }
-        if !handled {
-            host.activate()
+        host.activate()
+        if bundle == "com.microsoft.VSCode" {
             AXWindows.raiseWindow(ofPID: host.processIdentifier, titleContaining: session.projectName)
         }
     }
@@ -456,7 +433,7 @@ enum Proc {
         return String(cString: buf)
     }
 
-    /// Nearest ancestor that is a regular GUI app (Terminal, VS Code, iTerm…).
+    /// Nearest ancestor that is a regular GUI app (Terminal.app, VS Code).
     static func hostApplication(of pid: pid_t) -> NSRunningApplication? {
         var cur = pid
         for _ in 0..<16 {
