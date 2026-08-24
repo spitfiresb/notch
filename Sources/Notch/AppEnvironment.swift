@@ -71,8 +71,9 @@ final class AppEnvironment: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] on in self?.claude.setHooksEnabled(on) }
             .store(in: &cancellables)
-        claude.onAttention = { s in
+        claude.onAttention = { [weak self] s in
             notchLog("claude-sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
+            if s.state == .done { self?.notch.presentSessionToast(SessionToast(session: s)) }
         }
         claude.start()
     }
@@ -82,6 +83,22 @@ final class AppEnvironment: ObservableObject {
 struct ScreenshotToast: Equatable {
     let url: URL
     let message: String
+}
+
+/// Transient "<project> Claude session finished" banner.
+struct SessionToast: Equatable {
+    let session: ClaudeSession
+    /// Long folder names get clipped so the banner still fits `toastSize`.
+    var message: String {
+        let name = session.projectName
+        let shown = name.count > 14 ? String(name.prefix(13)) + "…" : name
+        return "\(shown) Claude session finished"
+    }
+}
+
+enum NotchToast: Equatable {
+    case screenshot(ScreenshotToast)
+    case session(SessionToast)
 }
 
 /// Open / closed state of the notch panel plus which tab is showing.
@@ -109,7 +126,7 @@ final class NotchState: ObservableObject {
     }
     /// Either downward extension is showing.
     var isTallOpen: Bool { isOpen && ((tab == .music && musicPanelExpanded) || sessionsPanelExpanded) }
-    @Published var toast: ScreenshotToast?
+    @Published var toast: NotchToast?
     /// Music tab's taller state — the "Saved in" playlist panel unfolded
     /// beneath the transport controls.
     @Published var musicPanelExpanded = false {
@@ -197,10 +214,20 @@ final class NotchState: ObservableObject {
     /// Pop the notch open with a "screenshot copied" banner; auto-collapses after a beat.
     func presentScreenshotToast(url: URL) {
         closeWork?.cancel(); closeWork = nil
-        toast = ScreenshotToast(url: url, message: "Screenshot copied to clipboard")
+        toast = .screenshot(ScreenshotToast(url: url, message: "Screenshot copied to clipboard"))
         tab = .screenshots          // what's revealed if the banner is dismissed early
         isOpen = true
         pinnedUntil = Date().addingTimeInterval(2.25)
         scheduleClose(after: 2.35)
+    }
+
+    /// Pop the notch open with a "<project> Claude session finished" banner.
+    func presentSessionToast(_ t: SessionToast) {
+        closeWork?.cancel(); closeWork = nil
+        toast = .session(t)
+        sessionsPanelExpanded = false
+        isOpen = true
+        pinnedUntil = Date().addingTimeInterval(2.6)
+        scheduleClose(after: 2.7)
     }
 }

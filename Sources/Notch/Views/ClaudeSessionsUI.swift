@@ -71,6 +71,38 @@ struct SessionsCorner: View {
     }
 }
 
+// MARK: - Finished toast
+
+/// "<project> Claude session finished ✓" — same choreography as the screenshot
+/// banner: characters cascade in, then the circle-check strokes itself.
+/// Clicking jumps to the session's terminal.
+struct SessionToastView: View {
+    let toast: SessionToast
+    @EnvironmentObject private var store: ClaudeSessionStore
+    @EnvironmentObject private var notch: NotchState
+
+    private static let lead = 0.34
+    private static let perChar = 0.018
+
+    var body: some View {
+        HStack(spacing: 9) {
+            CascadeText(text: toast.message, startDelay: Self.lead, perChar: Self.perChar)
+                .font(.system(size: 12, weight: .semibold))
+                .kerning(-0.1)
+                .foregroundStyle(.white)
+            CircleCheckmark(delay: Self.lead + Double(toast.message.count) * Self.perChar + 0.04)
+                .frame(width: 18, height: 18)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 0).onEnded { _ in
+            store.focus(toast.session)
+            notch.dismissToast()
+        })
+    }
+}
+
 // MARK: - Unfolded panel
 
 /// Session rows shown in the space that opens beneath the tab.

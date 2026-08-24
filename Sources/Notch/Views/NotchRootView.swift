@@ -121,10 +121,15 @@ struct NotchRootView: View {
             .animation(transitionAnim, value: notch.isOpen)
 
             if let toast = notch.toast {
-                ScreenshotToastView(toast: toast)
-                    .padding(.horizontal, 14)
-                    .foregroundStyle(.white)
-                    .transition(.opacity)
+                Group {
+                    switch toast {
+                    case .screenshot(let t): ScreenshotToastView(toast: t)
+                    case .session(let t):    SessionToastView(toast: t)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .foregroundStyle(.white)
+                .transition(.opacity)
             }
 
             // Claude spinner in the bottom-right corner of the tab area while a
