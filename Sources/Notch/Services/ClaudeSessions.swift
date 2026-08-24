@@ -263,6 +263,7 @@ final class ClaudeSessionStore: ObservableObject {
         }
 
         byID[id] = s
+        notchLog("claude-sessions: \(name) \(s.projectName) id=\(id.prefix(8)) pid=\(s.pid.map(String.init) ?? "?") tty=\(s.tty ?? "?") state=\(s.state) \(s.activity ?? s.attention ?? "")")
         publish()
         if s.state != previous, s.state == .waiting || s.state == .done || s.state == .failed {
             onAttention?(s)
