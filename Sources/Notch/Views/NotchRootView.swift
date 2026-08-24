@@ -238,6 +238,9 @@ private struct CollapsedPeek: View {
             // right edge and nudges the bars left; gone again when it finishes.
             if claude.anyActive {
                 ClaudeSpinner(state: claude.headlineState, size: 13)
+                    // The asterisk glyphs carry more ink below centre, so a
+                    // geometrically centred spinner reads low next to the bars.
+                    .offset(y: -1)
                     .padding(.leading, 8)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
