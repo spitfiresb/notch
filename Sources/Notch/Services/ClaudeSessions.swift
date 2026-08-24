@@ -85,9 +85,6 @@ struct ClaudeSession: Identifiable, Equatable {
 final class ClaudeSessionStore: ObservableObject {
     @Published private(set) var sessions: [ClaudeSession] = []
     @Published private(set) var hooksInstalled = false
-    /// Keep the spinner on screen even with no active session — for tweaking
-    /// the UI without having to keep a session busy. Driven by Settings.
-    @Published var forceIndicator = false
 
     /// Fired when a session flips into a state that deserves a nudge
     /// (needs permission / finished / failed). UI decides how loud to be.
@@ -112,7 +109,7 @@ final class ClaudeSessionStore: ObservableObject {
     }
     var attentionCount: Int { sessions.filter(\.needsAttention).count }
     /// A session is mid-task: working, or blocked on you to keep working.
-    var anyActive: Bool { forceIndicator || sessions.contains { $0.isBusy || $0.needsAttention } }
+    var anyActive: Bool { sessions.contains { $0.isBusy || $0.needsAttention } }
     /// What the single collapsed-pill spinner should express: needs-you wins
     /// over plain busy.
     var headlineState: ClaudeSession.State {

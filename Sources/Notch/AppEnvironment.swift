@@ -71,10 +71,6 @@ final class AppEnvironment: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] on in self?.claude.setHooksEnabled(on) }
             .store(in: &cancellables)
-        settings.$claudeIndicatorAlwaysOn
-            .removeDuplicates()
-            .sink { [weak self] on in self?.claude.forceIndicator = on }
-            .store(in: &cancellables)
         claude.onAttention = { s in
             notchLog("claude-sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
         }
