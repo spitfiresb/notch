@@ -420,13 +420,30 @@ enum Proc {
         kill(pid, 0) == 0 || errno == EPERM
     }
 
-    /// Walk up from a hook's shell to the `claude` process that spawned it.
-    /// The CLI is a native binary named `claude`; the npm install runs as `node`.
+    /// Executable path via libproc (empty when unavailable).
+    static func path(_ pid: pid_t) -> String {
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))   // PROC_PIDPATHINFO_MAXSIZE
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return "" }
+        return String(cString: buf)
+    }
+
+    private static let shells: Set<String> = ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh"]
+
+    /// Walk up from the hook process (its `$PPID` — usually claude itself) to
+    /// the `claude` process that spawned it.
+    /// Can't match on `p_comm`: the native CLI sets it to its version string
+    /// ("2.1.241"), so match the executable name (claude / node for the npm
+    /// install) and otherwise take the first non-shell ancestor — the hook is
+    /// spawned either directly by claude or through one `sh -c`.
     static func findClaudeAncestor(of pid: pid_t) -> pid_t? {
         var cur = pid
         for _ in 0..<8 {
             guard let i = info(cur), i.pid > 1 else { return nil }
-            if i.comm == "claude" || i.comm == "node" { return i.pid }
+            let full = path(i.pid)
+            let exe = (full as NSString).lastPathComponent
+            // Native install lives at ~/.local/share/claude/versions/<ver>.
+            if exe == "claude" || exe == "node" || full.localizedCaseInsensitiveContains("/claude/") { return i.pid }
+            if !shells.contains(exe), !shells.contains(i.comm) { return i.pid }
             cur = i.ppid
         }
         return nil
