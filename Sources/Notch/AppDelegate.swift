@@ -171,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !notch.isOpen {
                 notch.open()
             } else if notch.sessionsPanelExpanded,
-                      mouse.y > blobRect.maxY - (ScreenMetrics.expandedSize.height - SessionsCorner.stripHeight) {
+                      mouse.y > blobRect.maxY - SessionsCorner.stripTopInset {
                 // Cursor moved back up into the regular tab area (above the
                 // spinner strip that opened the panel) — fold the panel away.
                 notch.sessionsPanelExpanded = false

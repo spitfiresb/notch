@@ -131,7 +131,7 @@ struct NotchRootView: View {
             // session is working; hovering it unfolds the sessions panel.
             SessionsCorner()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(.top, ScreenMetrics.expandedSize.height - SessionsCorner.stripHeight)
+                .padding(.top, SessionsCorner.stripTopInset)
                 .padding(.trailing, 22)
                 .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
                 .allowsHitTesting(notch.isOpen && notch.toast == nil)
@@ -237,7 +237,7 @@ private struct CollapsedPeek: View {
             // While a Claude session is working, its spinner slides in at the
             // right edge and nudges the bars left; gone again when it finishes.
             if claude.anyActive {
-                ClaudeSpinner(state: claude.headlineState, size: 11)
+                ClaudeSpinner(state: claude.headlineState, size: 13)
                     .padding(.leading, 8)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }

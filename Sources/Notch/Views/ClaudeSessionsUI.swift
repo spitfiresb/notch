@@ -15,8 +15,9 @@ struct ClaudeSpinner: View {
     private var blocked: Bool { state == .waiting || state == .failed }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: blocked ? 0.6 : 0.15)) { ctx in
-            let tick = Int(ctx.date.timeIntervalSinceReferenceDate / (blocked ? 0.6 : 0.15))
+        let step = blocked ? 1.2 : 0.30
+        TimelineView(.periodic(from: .now, by: step)) { ctx in
+            let tick = Int(ctx.date.timeIntervalSinceReferenceDate / step)
             Text(blocked ? (tick % 2 == 0 ? "✻" : "✽") : Self.frames[tick % Self.frames.count])
                 .font(.system(size: size, weight: .bold))
                 .foregroundStyle(blocked ? Self.amber : Self.orange)
@@ -36,23 +37,27 @@ struct SessionsCorner: View {
 
     /// Height of the strip along the bottom of the tab area that the spinner
     /// lives in. The hover watcher treats anything above it as "back in the tab".
-    static let stripHeight: CGFloat = 26
+    /// Same height as the music tab's transport row so the spinner sits on
+    /// the ⏮ ⏯ ⏭ centreline.
+    static let stripHeight: CGFloat = 30
+    /// Distance from the top of the open blob to the top of the strip: the
+    /// transport row is the last thing in the tab, above its 10 pt bottom pad.
+    static let stripTopInset: CGFloat = ScreenMetrics.expandedSize.height - 10 - stripHeight
     /// Where the spinner sits, in screen coordinates, given the open blob's
-    /// rect: bottom-right of the standard-height panel, inside the 22 pt
-    /// content inset. Mirrors the layout in NotchRootView.
+    /// rect (bottom-right, inside the 22 pt content inset). Mirrors NotchRootView.
     static func hitRect(inBlob blob: NSRect) -> NSRect {
-        let top = blob.maxY - ScreenMetrics.expandedSize.height
-        return NSRect(x: blob.maxX - 22 - 26, y: top, width: 30, height: stripHeight + 2)
+        NSRect(x: blob.maxX - 22 - 28, y: blob.maxY - stripTopInset - stripHeight,
+               width: 32, height: stripHeight)
     }
 
     var body: some View {
         ZStack {
             if claude.anyActive {
-                ClaudeSpinner(state: claude.headlineState, size: 12)
+                ClaudeSpinner(state: claude.headlineState, size: 14)
                     .transition(.scale(scale: 0.4).combined(with: .opacity))
             }
         }
-        .frame(width: 22, height: Self.stripHeight)
+        .frame(width: 24, height: Self.stripHeight)
         .contentShape(Rectangle())
         .onHover { inside in
             if inside, claude.anyActive, !notch.sessionsPanelExpanded {
