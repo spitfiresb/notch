@@ -142,9 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // blob may be smaller, so hover-tracking follows the blob, not the frame.
         let wf = panel.frame
         let blobSize: CGSize = notch.isOpen
-            ? (notch.tab == .music && notch.musicPanelExpanded
-               ? ScreenMetrics.expandedMusicSize
-               : ScreenMetrics.expandedSize)
+            ? (notch.isTallOpen ? ScreenMetrics.expandedMusicSize : ScreenMetrics.expandedSize)
             : ScreenMetrics.notchSize
         let blobRect = NSRect(x: wf.midX - blobSize.width / 2,
                               y: wf.maxY - blobSize.height,
@@ -171,13 +169,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if blobRect.contains(mouse) || hoverGraceRect != nil {
             notch.cancelScheduledClose()
             if !notch.isOpen {
-                // Entering over the session cluster (left edge of the pill)
-                // opens straight onto the session detail; anywhere else is a
-                // normal open. 22 pt matches CollapsedPeek's horizontal padding.
-                let cluster = notch.sessionClusterWidth
-                let overCluster = cluster > 0
-                    && mouse.x < blobRect.minX + 22 + cluster + 6
-                notch.open(tab: overCluster ? .sessions : (notch.tab == .sessions ? .music : nil))
+                notch.open()
+            } else if notch.sessionsPanelExpanded,
+                      mouse.y > blobRect.maxY - (ScreenMetrics.expandedSize.height - SessionsCorner.stripHeight) {
+                // Cursor moved back up into the regular tab area (above the
+                // spinner strip that opened the panel) — fold the panel away.
+                notch.sessionsPanelExpanded = false
+            } else if !notch.sessionsPanelExpanded, notch.toast == nil, env.claude.anyActive,
+                      SessionsCorner.hitRect(inBlob: blobRect).contains(mouse) {
+                // Hovering the Claude spinner in the bottom-right corner
+                // unfolds the sessions panel. Done here (geometry) rather than
+                // via SwiftUI's onHover so it can't miss a fast cursor.
+                notch.sessionsPanelExpanded = true
             } else if notch.toast != nil && !notch.isPinnedOpen {
                 notch.dismissToast()   // banner's time is up — reveal the tabs underneath
             }
@@ -297,7 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func cycleTab(by dir: Int) {
         let notch = env.notch
         guard notch.isOpen, notch.toast == nil else { return }
-        let tabs = NotchState.Tab.swipeable
+        let tabs = NotchState.Tab.allCases
         guard let i = tabs.firstIndex(of: notch.tab) else { return }
         let new = i + dir
         guard new >= 0, new < tabs.count else { return }

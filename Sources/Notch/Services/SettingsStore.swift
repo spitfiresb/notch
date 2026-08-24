@@ -33,8 +33,14 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(claudeSessionsEnabled, forKey: Keys.claudeSessions) }
     }
 
+    /// Debug aid: keep the Claude spinner visible even with no active session.
+    @Published var claudeIndicatorAlwaysOn: Bool {
+        didSet { UserDefaults.standard.set(claudeIndicatorAlwaysOn, forKey: Keys.claudeIndicatorAlwaysOn) }
+    }
+
     private enum Keys {
         static let claudeSessions = "settings.claudeSessionsEnabled"
+        static let claudeIndicatorAlwaysOn = "settings.claudeIndicatorAlwaysOn"
         static let copyScreenshot = "settings.copyScreenshotToClipboard"
         static let launchAtLoginSeeded = "settings.launchAtLogin.seeded"
     }
@@ -55,6 +61,11 @@ final class SettingsStore: ObservableObject {
             defaults.set(true, forKey: Keys.claudeSessions)
         }
         claudeSessionsEnabled = defaults.bool(forKey: Keys.claudeSessions)
+        // Defaults ON while the UI is being designed; flip off in Settings.
+        if defaults.object(forKey: Keys.claudeIndicatorAlwaysOn) == nil {
+            defaults.set(true, forKey: Keys.claudeIndicatorAlwaysOn)
+        }
+        claudeIndicatorAlwaysOn = defaults.bool(forKey: Keys.claudeIndicatorAlwaysOn)
         // Routing reflects the live system pref — the user (or this app) may have
         // already pointed `screencapture` somewhere; mirror reality, don't overwrite it.
         routeScreenshotsToFolder = Self.detectScreenshotRouting()

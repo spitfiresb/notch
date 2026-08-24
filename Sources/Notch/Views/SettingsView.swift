@@ -32,6 +32,14 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                Toggle(isOn: $settings.claudeIndicatorAlwaysOn) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Always show the Claude indicator")
+                        Text("Keeps the spinner in the notch even when no session is working — handy while tweaking the UI.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 Text("Claude Code")
             }
