@@ -130,6 +130,7 @@ struct NotchRootView: View {
         switch notch.tab {
         case .music:       MusicTabView(namespace: chromeNS)
         case .screenshots: ScreenshotTabView()
+        case .sessions:    SessionsTabView()
         }
     }
 }

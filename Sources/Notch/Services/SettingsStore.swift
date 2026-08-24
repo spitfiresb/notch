@@ -27,7 +27,14 @@ final class SettingsStore: ObservableObject {
         didSet { Self.applyLaunchAtLogin(enabled: launchAtLogin) }
     }
 
+    /// Show live Claude Code sessions in the notch. Installs hook entries into
+    /// ~/.claude/settings.json (removed again when turned off).
+    @Published var claudeSessionsEnabled: Bool {
+        didSet { UserDefaults.standard.set(claudeSessionsEnabled, forKey: Keys.claudeSessions) }
+    }
+
     private enum Keys {
+        static let claudeSessions = "settings.claudeSessionsEnabled"
         static let copyScreenshot = "settings.copyScreenshotToClipboard"
         static let launchAtLoginSeeded = "settings.launchAtLogin.seeded"
     }
@@ -44,6 +51,10 @@ final class SettingsStore: ObservableObject {
             defaults.set(true, forKey: Keys.copyScreenshot)
         }
         copyScreenshotToClipboard = defaults.bool(forKey: Keys.copyScreenshot)
+        if defaults.object(forKey: Keys.claudeSessions) == nil {
+            defaults.set(true, forKey: Keys.claudeSessions)
+        }
+        claudeSessionsEnabled = defaults.bool(forKey: Keys.claudeSessions)
         // Routing reflects the live system pref — the user (or this app) may have
         // already pointed `screencapture` somewhere; mirror reality, don't overwrite it.
         routeScreenshotsToFolder = Self.detectScreenshotRouting()

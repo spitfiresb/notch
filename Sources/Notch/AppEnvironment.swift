@@ -10,6 +10,7 @@ final class AppEnvironment: ObservableObject {
     let screenshots = ScreenshotWatcher()
     let audioMeter = AudioMeter()
     let settings = SettingsStore()
+    let claude = ClaudeSessionStore()
 
     private var cancellables = Set<AnyCancellable>()
     /// Pending delayed audio-meter teardown after playback pauses.
@@ -62,6 +63,18 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] _ in self?.screenshots.rebindToCurrentDirectory() }
             .store(in: &cancellables)
         screenshots.start()
+        // Claude Code sessions: install hooks once on first launch (toggle in
+        // Settings removes them), then tail the event spool.
+        if settings.claudeSessionsEnabled && !ClaudeHooks.isInstalled { ClaudeHooks.install() }
+        settings.$claudeSessionsEnabled
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] on in self?.claude.setHooksEnabled(on) }
+            .store(in: &cancellables)
+        claude.onAttention = { s in
+            notchLog("claude-sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
+        }
+        claude.start()
     }
 }
 
@@ -75,12 +88,13 @@ struct ScreenshotToast: Equatable {
 @MainActor
 final class NotchState: ObservableObject {
     enum Tab: String, CaseIterable, Identifiable {
-        case music, screenshots
+        case music, screenshots, sessions
         var id: String { rawValue }
         var symbol: String {
             switch self {
             case .music: "music.note"
             case .screenshots: "camera.viewfinder"
+            case .sessions: "terminal"
             }
         }
     }

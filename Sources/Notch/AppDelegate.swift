@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(env.screenshots)
             .environmentObject(env.audioMeter)
             .environmentObject(env.settings)
+            .environmentObject(env.claude)
         let panel = NotchPanel(rootView: root)
         self.panel = panel
         panel.show()
