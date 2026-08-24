@@ -171,7 +171,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if blobRect.contains(mouse) || hoverGraceRect != nil {
             notch.cancelScheduledClose()
             if !notch.isOpen {
-                notch.open()
+                // Entering over the session cluster (left edge of the pill)
+                // opens straight onto the session detail; anywhere else is a
+                // normal open. 22 pt matches CollapsedPeek's horizontal padding.
+                let cluster = notch.sessionClusterWidth
+                let overCluster = cluster > 0
+                    && mouse.x < blobRect.minX + 22 + cluster + 6
+                notch.open(tab: overCluster ? .sessions : (notch.tab == .sessions ? .music : nil))
             } else if notch.toast != nil && !notch.isPinnedOpen {
                 notch.dismissToast()   // banner's time is up — reveal the tabs underneath
             }
@@ -291,7 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func cycleTab(by dir: Int) {
         let notch = env.notch
         guard notch.isOpen, notch.toast == nil else { return }
-        let tabs = NotchState.Tab.allCases
+        let tabs = NotchState.Tab.swipeable
         guard let i = tabs.firstIndex(of: notch.tab) else { return }
         let new = i + dir
         guard new >= 0, new < tabs.count else { return }

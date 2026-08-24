@@ -23,9 +23,28 @@ struct ClaudeSession: Identifiable, Equatable {
         case failed
     }
 
+    enum Host: Equatable {
+        case terminal, vscode, other
+        var symbol: String {
+            switch self {
+            case .terminal: "terminal"
+            case .vscode:   "chevron.left.forwardslash.chevron.right"
+            case .other:    "app.dashed"
+            }
+        }
+        var label: String {
+            switch self {
+            case .terminal: "Terminal"
+            case .vscode:   "VS Code"
+            case .other:    "Other"
+            }
+        }
+    }
+
     let id: String                       // Claude's session_id
     var pid: pid_t?                      // the `claude` process, once resolved
     var tty: String?                     // e.g. "ttys001" — for terminal window lookup
+    var host: Host = .other
     var cwd: String
     var transcriptPath: String?
     var model: String?
@@ -39,10 +58,20 @@ struct ClaudeSession: Identifiable, Equatable {
     var attention: String?
     var subagentCount = 0
     var turnStartedAt: Date?
+    var turnEndedAt: Date?
     var lastEventAt: Date
     var startedAt: Date
 
-    var projectName: String { (cwd as NSString).lastPathComponent }
+    var projectName: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if cwd == home { return "~" }
+        return (cwd as NSString).lastPathComponent
+    }
+    /// Seconds the current (or last) turn has been running.
+    func turnDuration(at now: Date = Date()) -> TimeInterval? {
+        guard let start = turnStartedAt else { return nil }
+        return (turnEndedAt ?? now).timeIntervalSince(start)
+    }
     var needsAttention: Bool { state == .waiting || state == .failed }
     var isBusy: Bool { state == .thinking || state == .tool || state == .compacting }
 }
@@ -191,6 +220,11 @@ final class ClaudeSessionStore: ObservableObject {
         if s.pid == nil, let hp = hookParent, let claude = Proc.findClaudeAncestor(of: hp) {
             s.pid = claude
             s.tty = Proc.tty(of: claude)
+            switch Proc.hostApplication(of: claude)?.bundleIdentifier {
+            case "com.apple.Terminal":   s.host = .terminal
+            case "com.microsoft.VSCode": s.host = .vscode
+            default:                     s.host = .other
+            }
         }
         if s.branch == nil || name == "SessionStart" || name == "CwdChanged" {
             s.branch = Git.branch(at: s.cwd)
@@ -206,6 +240,7 @@ final class ClaudeSessionStore: ObservableObject {
         case "UserPromptSubmit":
             s.state = .thinking
             s.turnStartedAt = ts
+            s.turnEndedAt = nil
             s.attention = nil
             s.activity = nil
             s.lastReply = nil
@@ -242,10 +277,12 @@ final class ClaudeSessionStore: ObservableObject {
         case "Stop":
             s.state = .done
             s.activity = nil
+            s.turnEndedAt = ts
             s.lastReply = Self.snippet(e["last_assistant_message"] as? String, max: 140)
         case "StopFailure":
             s.state = .failed
             s.activity = nil
+            s.turnEndedAt = ts
             let type = e["error_type"] as? String ?? "error"
             s.attention = Self.snippet(e["error_message"] as? String, max: 90) ?? type
         case "SubagentStart":

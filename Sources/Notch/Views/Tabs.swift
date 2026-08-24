@@ -827,7 +827,7 @@ struct ScreenshotToastView: View {
 }
 
 /// Text whose characters spring in one after another, left → right.
-private struct CascadeText: View {
+struct CascadeText: View {
     let text: String
     var startDelay: Double = 0
     var perChar: Double = 0.02

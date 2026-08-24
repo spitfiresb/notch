@@ -107,10 +107,15 @@ struct NotchRootView: View {
             .animation(transitionAnim, value: notch.isOpen)
 
             if let toast = notch.toast {
-                ScreenshotToastView(toast: toast)
-                    .padding(.horizontal, 14)
-                    .foregroundStyle(.white)
-                    .transition(.opacity)
+                Group {
+                    switch toast {
+                    case .screenshot(let t): ScreenshotToastView(toast: t)
+                    case .session(let t):    SessionToastView(toast: t)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .foregroundStyle(.white)
+                .transition(.opacity)
             }
 
             // Tiny settings gear, top-right of the expanded panel. Sits just past
@@ -130,7 +135,7 @@ struct NotchRootView: View {
         switch notch.tab {
         case .music:       MusicTabView(namespace: chromeNS)
         case .screenshots: ScreenshotTabView()
-        case .sessions:    SessionsTabView()
+        case .sessions:    SessionDetailView()
         }
     }
 }
@@ -203,16 +208,21 @@ private struct CollapsedPeek: View {
                 .frame(width: 14, height: 14)
                 .clipShape(Rectangle())
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
-                .opacity(music.displayArt != nil ? 1 : 0)
+                .opacity(showing && music.displayArt != nil ? 1 : 0)
+            // Live Claude sessions, grouped by host. Sits just right of the art
+            // (or at the edge when nothing's playing); hidden when there are none.
+            SessionCluster()
+                .padding(.leading, showing && music.displayArt != nil ? 7 : 0)
             Spacer(minLength: 0)
             DancingBars(color: music.displayAccent,
                         isPlaying: music.info.isPlaying)
                 .frame(width: 20, height: 14)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
+                .opacity(showing ? 1 : 0)
         }
+        .coordinateSpace(name: "peek")     // SessionCluster measures its edge in this
         .padding(.horizontal, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .opacity(showing ? 1 : 0)
         .animation(Self.trackFade, value: music.displayKey)
         .animation(Self.trackFade, value: music.displayAccent)
     }

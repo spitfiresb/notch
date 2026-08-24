@@ -71,8 +71,14 @@ final class AppEnvironment: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] on in self?.claude.setHooksEnabled(on) }
             .store(in: &cancellables)
-        claude.onAttention = { s in
+        claude.onAttention = { [weak self] s in
+            guard let self else { return }
             notchLog("claude-sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
+            switch s.state {
+            case .done:              self.notch.presentSessionToast(SessionToast(session: s, kind: .finished))
+            case .waiting, .failed:  self.notch.presentSessionToast(SessionToast(session: s, kind: .needsYou))
+            default: break
+            }
         }
         claude.start()
     }
@@ -84,12 +90,33 @@ struct ScreenshotToast: Equatable {
     let message: String
 }
 
+/// Transient "session finished / needs you" banner.
+struct SessionToast: Equatable {
+    enum Kind { case finished, needsYou }
+    let session: ClaudeSession
+    let kind: Kind
+    var message: String {
+        switch kind {
+        case .finished: "\(session.projectName) finished"
+        case .needsYou: "\(session.projectName) needs you"
+        }
+    }
+}
+
+enum NotchToast: Equatable {
+    case screenshot(ScreenshotToast)
+    case session(SessionToast)
+}
+
 /// Open / closed state of the notch panel plus which tab is showing.
 @MainActor
 final class NotchState: ObservableObject {
     enum Tab: String, CaseIterable, Identifiable {
         case music, screenshots, sessions
         var id: String { rawValue }
+        /// Tabs reachable by swiping. Sessions isn't a destination — it opens
+        /// only by hovering the session cluster in the collapsed pill.
+        static let swipeable: [Tab] = [.music, .screenshots]
         var symbol: String {
             switch self {
             case .music: "music.note"
@@ -103,7 +130,11 @@ final class NotchState: ObservableObject {
     @Published var tab: Tab = .music {
         didSet { if tab != .music { musicPanelExpanded = false } }
     }
-    @Published var toast: ScreenshotToast?
+    @Published var toast: NotchToast?
+    /// Width of the session cluster drawn at the left of the collapsed pill —
+    /// the hover watcher uses it to decide whether a hover-open should land on
+    /// the session detail instead of the music tab.
+    @Published var sessionClusterWidth: CGFloat = 0
     /// Music tab's taller state — the "Saved in" playlist panel unfolded
     /// beneath the transport controls.
     @Published var musicPanelExpanded = false
@@ -188,10 +219,22 @@ final class NotchState: ObservableObject {
     /// Pop the notch open with a "screenshot copied" banner; auto-collapses after a beat.
     func presentScreenshotToast(url: URL) {
         closeWork?.cancel(); closeWork = nil
-        toast = ScreenshotToast(url: url, message: "Screenshot copied to clipboard")
+        toast = .screenshot(ScreenshotToast(url: url, message: "Screenshot copied to clipboard"))
         tab = .screenshots          // what's revealed if the banner is dismissed early
         isOpen = true
         pinnedUntil = Date().addingTimeInterval(2.25)
         scheduleClose(after: 2.35)
+    }
+
+    /// Pop the notch open with a "session finished / needs you" banner.
+    /// Skipped when the session detail is already on screen — you're looking.
+    func presentSessionToast(_ t: SessionToast) {
+        if isOpen, tab == .sessions, toast == nil { return }
+        closeWork?.cancel(); closeWork = nil
+        toast = .session(t)
+        tab = .sessions             // revealed if the banner is dismissed early
+        isOpen = true
+        pinnedUntil = Date().addingTimeInterval(2.6)
+        scheduleClose(after: 2.7)
     }
 }
