@@ -74,6 +74,17 @@ struct ClaudeSession: Identifiable, Equatable {
     }
     var needsAttention: Bool { state == .waiting || state == .failed }
     var isBusy: Bool { state == .thinking || state == .tool || state == .compacting }
+
+    /// Pin this session to its `claude` process and derive tty / host from it.
+    mutating func attach(pid claude: pid_t) {
+        pid = claude
+        tty = Proc.tty(of: claude)
+        switch Proc.hostApplication(of: claude)?.bundleIdentifier {
+        case "com.apple.Terminal":   host = .terminal
+        case "com.microsoft.VSCode": host = .vscode
+        default:                     host = .other
+        }
+    }
 }
 
 // MARK: - Store
@@ -96,6 +107,7 @@ final class ClaudeSessionStore: ObservableObject {
     private var source: DispatchSourceFileSystemObject?
     private var livenessTimer: Timer?
     private var pendingBuffer = Data()
+    private var tick = 0
 
     private static let spoolTruncateBytes: UInt64 = 4_000_000
 
@@ -124,8 +136,15 @@ final class ClaudeSessionStore: ObservableObject {
         ClaudeHooks.ensureScript()
         replayAndTruncate()
         openSpool()
-        livenessTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.reapDead() }
+        // The vnode source is the fast path; the poll is a safety net so a
+        // missed kqueue event can never stall the tail.
+        livenessTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.readNew()
+                self.tick += 1
+                if self.tick % 3 == 0 { self.reapDead() }
+            }
         }
     }
 
@@ -225,13 +244,24 @@ final class ClaudeSessionStore: ObservableObject {
         s.lastEventAt = ts
         if !cwd.isEmpty { s.cwd = cwd }
         if let t = e["transcript_path"] as? String { s.transcriptPath = t }
-        if s.pid == nil, let hp = hookParent, let claude = Proc.findClaudeAncestor(of: hp) {
-            s.pid = claude
-            s.tty = Proc.tty(of: claude)
-            switch Proc.hostApplication(of: claude)?.bundleIdentifier {
-            case "com.apple.Terminal":   s.host = .terminal
-            case "com.microsoft.VSCode": s.host = .vscode
-            default:                     s.host = .other
+        // Pin to the claude process. Re-resolve every event so an early wrong
+        // guess self-heals; when the hook's parent is already gone (replayed
+        // events, or a short-lived `sh -c`), fall back to a live claude
+        // process in this session's folder that no other session owns.
+        if let hp = hookParent, let claude = Proc.findClaudeAncestor(of: hp), claude != s.pid {
+            s.attach(pid: claude)
+        } else if s.pid == nil || !Proc.isAlive(s.pid!) {
+            let claimed = Set(byID.values.filter { $0.id != id }.compactMap(\.pid))
+            if let p = Proc.claudeProcesses().first(where: { $0.cwd == s.cwd && !claimed.contains($0.pid) }) {
+                s.attach(pid: p.pid)
+            }
+        }
+        // One process = one session. A `/clear` or resume hands the same
+        // process a new session id; the old entry is superseded, not a sibling.
+        if let p = s.pid {
+            for (otherID, o) in byID where otherID != id && o.pid == p {
+                byID.removeValue(forKey: otherID)
+                notchLog("claude-sessions: \(otherID.prefix(8)) superseded by \(id.prefix(8)) (pid \(p))")
             }
         }
         if s.branch == nil || name == "SessionStart" || name == "CwdChanged" {
@@ -321,16 +351,21 @@ final class ClaudeSessionStore: ObservableObject {
     }
 
     /// Drop sessions whose process is gone. Sessions we never managed to pin to
-    /// a pid expire after an hour of silence instead.
+    /// a pid die once no claude process is running in their folder (after a
+    /// short grace so a slow resolve doesn't flicker), or after an hour.
     private func reapDead() {
         let now = Date()
         var changed = false
+        var live: [(pid: pid_t, cwd: String)]?
         for (id, s) in byID {
             let dead: Bool
             if let pid = s.pid {
                 dead = !Proc.isAlive(pid)
             } else {
-                dead = now.timeIntervalSince(s.lastEventAt) > 3600
+                let quiet = now.timeIntervalSince(s.lastEventAt)
+                if live == nil { live = Proc.claudeProcesses() }
+                let anyHere = live!.contains { $0.cwd == s.cwd }
+                dead = quiet > 3600 || (quiet > 60 && !anyHere)
             }
             if dead { byID.removeValue(forKey: id); changed = true }
         }
@@ -451,6 +486,36 @@ enum Proc {
 
     private static let shells: Set<String> = ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh"]
 
+    /// Native CLI: `~/.local/share/claude/versions/<ver>` or a `claude` binary.
+    /// (npm installs run under `node` and can't be told apart by path alone.)
+    static func isClaudeExecutable(_ full: String) -> Bool {
+        let exe = (full as NSString).lastPathComponent
+        return exe == "claude" || full.contains("/claude/versions/")
+    }
+
+    /// Working directory via libproc (empty when unavailable).
+    static func cwd(of pid: pid_t) -> String {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return "" }
+        return withUnsafePointer(to: &info.pvi_cdir.vip_path) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+    }
+
+    /// Every running native `claude` process with its cwd. ~1 ms; call sparingly.
+    static func claudeProcesses() -> [(pid: pid_t, cwd: String)] {
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 64)
+        let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        var out: [(pid: pid_t, cwd: String)] = []
+        for pid in pids.prefix(Int(max(0, n))) where pid > 0 && isClaudeExecutable(path(pid)) {
+            out.append((pid, cwd(of: pid)))
+        }
+        return out
+    }
+
     /// Walk up from the hook process (its `$PPID` — usually claude itself) to
     /// the `claude` process that spawned it.
     /// Can't match on `p_comm`: the native CLI sets it to its version string
@@ -464,7 +529,7 @@ enum Proc {
             let full = path(i.pid)
             let exe = (full as NSString).lastPathComponent
             // Native install lives at ~/.local/share/claude/versions/<ver>.
-            if exe == "claude" || exe == "node" || full.localizedCaseInsensitiveContains("/claude/") { return i.pid }
+            if exe == "node" || isClaudeExecutable(full) { return i.pid }
             if !shells.contains(exe), !shells.contains(i.comm) { return i.pid }
             cur = i.ppid
         }
