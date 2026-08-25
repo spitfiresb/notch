@@ -5,6 +5,7 @@ import SwiftUI
 /// a blob that grows/shrinks within it, so open/close is one smooth SwiftUI animation.
 struct NotchRootView: View {
     @EnvironmentObject private var notch: NotchState
+    @EnvironmentObject private var claude: ClaudeSessionStore
 
     /// Shared namespace for `matchedGeometryEffect` on the album art and dancing
     /// bars — lets SwiftUI morph those elements between the peek's small layout
@@ -20,8 +21,7 @@ struct NotchRootView: View {
 
     private var blobSize: CGSize {
         if notch.toast != nil { return ScreenMetrics.toastSize }
-        guard notch.isOpen else { return ScreenMetrics.notchSize }
-        return notch.isTallOpen ? ScreenMetrics.expandedMusicSize : ScreenMetrics.expandedSize
+        return notch.openBlobSize(sessionRows: claude.sessions.count)
     }
     private var bottomRadius: CGFloat {
         if notch.toast != nil { return 16 }
@@ -75,6 +75,7 @@ struct NotchRootView: View {
         .animation(Self.openAnim, value: notch.tab)
         .animation(Self.openAnim, value: notch.musicPanelExpanded)
         .animation(Self.openAnim, value: notch.sessionsPanelExpanded)
+        .animation(Self.openAnim, value: claude.sessions.count)
         .animation(transitionAnim, value: notch.toast)
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }

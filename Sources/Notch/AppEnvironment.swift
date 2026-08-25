@@ -92,7 +92,7 @@ struct SessionToast: Equatable {
     var message: String {
         let name = session.projectName
         let shown = name.count > 14 ? String(name.prefix(13)) + "…" : name
-        return "/\(shown) claude session finished"
+        return "\(shown) session complete"
     }
 }
 
@@ -126,6 +126,16 @@ final class NotchState: ObservableObject {
     }
     /// Either downward extension is showing.
     var isTallOpen: Bool { isOpen && ((tab == .music && musicPanelExpanded) || sessionsPanelExpanded) }
+    /// Blob size while open. The sessions panel is only as tall as its rows
+    /// (capped at the music-panel height, the window's fixed size).
+    func openBlobSize(sessionRows: Int) -> CGSize {
+        guard isOpen else { return ScreenMetrics.notchSize }
+        if tab == .music && musicPanelExpanded { return ScreenMetrics.expandedMusicSize }
+        guard sessionsPanelExpanded else { return ScreenMetrics.expandedSize }
+        let h = ScreenMetrics.expandedSize.height + SessionsPanel.height(rows: sessionRows) + 10
+        return CGSize(width: ScreenMetrics.expandedSize.width,
+                      height: min(h, ScreenMetrics.expandedMusicSize.height))
+    }
     @Published var toast: NotchToast?
     /// Music tab's taller state — the "Saved in" playlist panel unfolded
     /// beneath the transport controls.

@@ -71,35 +71,127 @@ struct SessionsCorner: View {
     }
 }
 
+// MARK: - Clawd
+
+/// Claude Code's pixel mascot, traced from the reference sprite: an 8×6
+/// torso with one-pixel arm nubs, single-pixel eyes set right of centre
+/// (looking where he's going) and four one-pixel legs, on a 10×7 grid.
+/// `.` empty, `#` body, `o` eye. Two run frames alternate the leg pairs.
+enum ClawdSprite {
+    static let frames: [[String]] = [
+        [
+            ".########.",
+            ".########.",
+            "###o###o##",
+            "##########",
+            ".########.",
+            ".########.",
+            ".#....#...",
+        ],
+        [
+            ".########.",
+            ".########.",
+            "###o###o##",
+            "##########",
+            ".########.",
+            ".########.",
+            "...#....#.",
+        ],
+    ]
+    static let columns = 10
+    static let rows = 7
+    static let body = Color(red: 0xDE / 255, green: 0x88 / 255, blue: 0x6D / 255)
+}
+
+/// One frame of Clawd, rendered pixel-perfect at `height` points.
+struct ClawdView: View {
+    var frame = 0
+    var height: CGFloat = 10
+    static func width(forHeight h: CGFloat) -> CGFloat {
+        h * CGFloat(ClawdSprite.columns) / CGFloat(ClawdSprite.rows)
+    }
+
+    var body: some View {
+        Canvas { ctx, size in
+            let p = size.height / CGFloat(ClawdSprite.rows)
+            var bodyPath = Path()
+            var eyePath = Path()
+            let bitmap = ClawdSprite.frames[frame % ClawdSprite.frames.count]
+            for (y, row) in bitmap.enumerated() {
+                for (x, ch) in row.enumerated() where ch != "." {
+                    // Overlap neighbours by a hair so antialiasing can't leave seams.
+                    let r = CGRect(x: CGFloat(x) * p, y: CGFloat(y) * p, width: p, height: p)
+                        .insetBy(dx: -0.15, dy: -0.15)
+                    if ch == "o" { eyePath.addRect(r) } else { bodyPath.addRect(r) }
+                }
+            }
+            ctx.fill(bodyPath, with: .color(ClawdSprite.body))
+            ctx.fill(eyePath, with: .color(.black))
+        }
+        .frame(width: Self.width(forHeight: height), height: height)
+    }
+}
+
 // MARK: - Finished toast
 
-/// "<project> Claude session finished ✓" — same choreography as the screenshot
-/// banner: characters cascade in, then the circle-check strokes itself.
-/// Clicking jumps to the session's terminal.
+/// Clawd sprints across the whole banner left → right — entering from beyond
+/// the blob's edge and leaving past the other — while "<project> session
+/// complete", centred, is painted in behind him as he passes. The notch
+/// folds up shortly after he's gone. Clicking jumps to the session.
 struct SessionToastView: View {
     let toast: SessionToast
     @EnvironmentObject private var store: ClaudeSessionStore
     @EnvironmentObject private var notch: NotchState
+    @State private var start = Date()
 
-    private static let lead = 0.34
-    private static let perChar = 0.018
+    /// Notch-expand settle time before Clawd enters.
+    private static let lead = 0.30
+    /// Time to cross from fully outside the left edge to fully outside the right.
+    private static let run = 1.7
+    /// Seconds per run-cycle frame.
+    private static let stride = 0.085
+    /// A touch taller than the 12 pt label so he reads as a character, not a glyph.
+    private static let spriteHeight: CGFloat = 15
+    /// Horizontal inset NotchRootView applies to the toast content; the blob
+    /// edge (where clipping happens) sits this far outside our bounds.
+    private static let edgeInset: CGFloat = 14
 
     var body: some View {
-        HStack(spacing: 9) {
-            CascadeText(text: toast.message, startDelay: Self.lead, perChar: Self.perChar)
-                .font(.system(size: 11, weight: .semibold))
-                .kerning(-0.1)
-                .foregroundStyle(.white)
-            CircleCheckmark(delay: Self.lead + Double(toast.message.count) * Self.perChar + 0.04)
-                .frame(width: 18, height: 18)
-            Spacer(minLength: 0)
+        GeometryReader { geo in
+            let w = geo.size.width
+            let spriteW = ClawdView.width(forHeight: Self.spriteHeight)
+            TimelineView(.animation) { ctx in
+                let t = ctx.date.timeIntervalSince(start) - Self.lead
+                let progress = min(max(t / Self.run, 0), 1)
+                let startX = -Self.edgeInset - spriteW
+                let endX = w + Self.edgeInset
+                let x = startX + (endX - startX) * CGFloat(progress)
+                let frame = Int(max(0, t) / Self.stride) % ClawdSprite.frames.count
+                ZStack(alignment: .leading) {
+                    Text(toast.message)
+                        .font(.system(size: 12, weight: .semibold))
+                        .kerning(-0.1)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .frame(maxWidth: .infinity)          // centred in the banner
+                        // Revealed up to Clawd's midline, so it trails in his wake.
+                        .mask(alignment: .leading) {
+                            Rectangle().frame(width: max(0, x + spriteW / 2))
+                        }
+                    ClawdView(frame: frame, height: Self.spriteHeight)
+                        .offset(x: x, y: frame == 1 ? -0.7 : 0)
+                        .opacity(t >= 0 ? 1 : 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 0).onEnded { _ in
             store.focus(toast.session)
             notch.dismissToast()
         })
+        .onAppear { start = Date() }
     }
 }
 
@@ -108,6 +200,13 @@ struct SessionToastView: View {
 /// Session rows shown in the space that opens beneath the tab.
 struct SessionsPanel: View {
     @EnvironmentObject private var store: ClaudeSessionStore
+
+    static let rowHeight: CGFloat = 35
+    static let rowSpacing: CGFloat = 3
+    /// Content height for `rows` sessions — what the blob grows by.
+    static func height(rows: Int) -> CGFloat {
+        rows == 0 ? 24 : CGFloat(rows) * rowHeight + CGFloat(rows - 1) * rowSpacing
+    }
 
     var body: some View {
         if store.sessions.isEmpty {
@@ -118,7 +217,7 @@ struct SessionsPanel: View {
         } else {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 3) {
+                    VStack(spacing: Self.rowSpacing) {
                         ForEach(store.ordered) { s in
                             SessionRow(session: s, now: ctx.date) { store.focus(s) }
                         }
@@ -223,7 +322,7 @@ private struct SessionRow: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .frame(height: SessionsPanel.rowHeight)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
             .fill(.white.opacity(hovering ? 0.10 : 0.05)))
         .contentShape(Rectangle())

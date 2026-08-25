@@ -141,9 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The window is always the tallest (music-expanded) size; the visible
         // blob may be smaller, so hover-tracking follows the blob, not the frame.
         let wf = panel.frame
-        let blobSize: CGSize = notch.isOpen
-            ? (notch.isTallOpen ? ScreenMetrics.expandedMusicSize : ScreenMetrics.expandedSize)
-            : ScreenMetrics.notchSize
+        let blobSize = notch.openBlobSize(sessionRows: env.claude.sessions.count)
         let blobRect = NSRect(x: wf.midX - blobSize.width / 2,
                               y: wf.maxY - blobSize.height,
                               width: blobSize.width,
