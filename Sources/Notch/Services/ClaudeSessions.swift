@@ -56,6 +56,9 @@ struct ClaudeSession: Identifiable, Equatable {
     var lastReply: String?
     /// Why it needs you (permission prompt text, question, error). Cleared when the user acts.
     var attention: String?
+    enum WaitingReason: Equatable { case permission, question }
+    /// What kind of input a `.waiting` session is blocked on.
+    var waitingReason: WaitingReason?
     var subagentCount = 0
     var turnStartedAt: Date?
     var turnEndedAt: Date?
@@ -108,6 +111,9 @@ final class ClaudeSessionStore: ObservableObject {
     private var livenessTimer: Timer?
     private var pendingBuffer = Data()
     private var tick = 0
+    /// True while folding the spool that accumulated before launch: state is
+    /// rebuilt silently, no toasts for events that are already history.
+    private var replaying = false
 
     private static let spoolTruncateBytes: UInt64 = 4_000_000
 
@@ -161,7 +167,9 @@ final class ClaudeSessionStore: ObservableObject {
     private func replayAndTruncate() {
         let url = ClaudeHooks.spoolURL
         if let data = try? Data(contentsOf: url) {
+            replaying = true
             ingest(data)
+            replaying = false
         }
         try? Data().write(to: url)
         offset = 0
@@ -298,6 +306,7 @@ final class ClaudeSessionStore: ObservableObject {
             }
         case "PermissionRequest":
             s.state = .waiting
+            s.waitingReason = .permission
             s.attention = "Permission: " + (Self.describeTool(name: e["tool_name"] as? String,
                                                                input: e["tool_input"] as? [String: Any]) ?? "tool")
         case "Notification":
@@ -306,6 +315,7 @@ final class ClaudeSessionStore: ObservableObject {
             switch type {
             case "permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input":
                 s.state = .waiting
+                s.waitingReason = type == "permission_prompt" ? .permission : .question
                 s.attention = Self.snippet(msg, max: 90) ?? "Needs your input"
             case "idle_prompt":
                 // Claude has been sitting at the prompt for a while — it's done, not blocked.
@@ -340,7 +350,7 @@ final class ClaudeSessionStore: ObservableObject {
         byID[id] = s
         notchLog("claude-sessions: \(name) \(s.projectName) id=\(id.prefix(8)) pid=\(s.pid.map(String.init) ?? "?") tty=\(s.tty ?? "?") state=\(s.state) \(s.activity ?? s.attention ?? "")")
         publish()
-        if s.state != previous, s.state == .waiting || s.state == .done || s.state == .failed {
+        if !replaying, s.state != previous, s.state == .waiting || s.state == .done || s.state == .failed {
             onAttention?(s)
         }
     }

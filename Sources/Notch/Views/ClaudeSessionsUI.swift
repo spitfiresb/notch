@@ -76,68 +76,85 @@ struct SessionsCorner: View {
 /// Claude Code's pixel mascot, traced from the reference sprite: an 8×6
 /// torso with one-pixel arm nubs, single-pixel eyes set right of centre
 /// (looking where he's going) and four one-pixel legs, on a 10×7 grid.
-/// `.` empty, `#` body, `o` eye. Two run frames alternate the leg pairs.
+/// `.` empty, `#` body, `o`/`x` eye colour.
 enum ClawdSprite {
-    static let frames: [[String]] = [
-        [
-            ".########.",
-            ".########.",
-            "###o###o##",
-            "##########",
-            ".########.",
-            ".########.",
-            ".#....#...",
-        ],
-        [
-            ".########.",
-            ".########.",
-            "###o###o##",
-            "##########",
-            ".########.",
-            ".########.",
-            "...#....#.",
-        ],
+    /// Run cycle: alternate leg pairs.
+    static let run: [[String]] = [
+        [".########.", ".########.", "###o###o##", "##########", ".########.", ".########.", ".#....#..."],
+        [".########.", ".########.", "###o###o##", "##########", ".########.", ".########.", "...#....#."],
+    ]
+    /// Standing: all four legs down.
+    static let stand: [String] =
+        [".########.", ".########.", "###o###o##", "##########", ".########.", ".########.", ".#.#..#.#."]
+    /// Knocked out: same solid body at 2× resolution so each eye is a 4×4 X.
+    static let down: [String] = [
+        "..################..",
+        "..################..",
+        "..################..",
+        "..###x##x####x##x#..",
+        "######xx######xx####",
+        "######xx######xx####",
+        "#####x##x####x##x###",
+        "..################..",
+        "..################..",
+        "..################..",
+        "..################..",
+        "..################..",
+        "..##..##....##..##..",
+        "..##..##....##..##..",
     ]
     static let columns = 10
     static let rows = 7
     static let body = Color(red: 0xDE / 255, green: 0x88 / 255, blue: 0x6D / 255)
+
+    /// 3×5 speech glyphs shown over his head.
+    static let bang: [String] = [".#.", ".#.", ".#.", "...", ".#."]
+    static let query: [String] = ["##.", "..#", ".#.", "...", ".#."]
+
+    static func width(forHeight h: CGFloat) -> CGFloat { h * CGFloat(columns) / CGFloat(rows) }
 }
 
-/// One frame of Clawd, rendered pixel-perfect at `height` points.
-struct ClawdView: View {
-    var frame = 0
-    var height: CGFloat = 10
-    static func width(forHeight h: CGFloat) -> CGFloat {
-        h * CGFloat(ClawdSprite.columns) / CGFloat(ClawdSprite.rows)
+/// A bitmap of `.`/`#`/`o`/`x` rows rendered pixel-perfect at `height` points.
+struct PixelBitmap: View {
+    let bitmap: [String]
+    var color: Color = ClawdSprite.body
+    var eye: Color = .black
+    var height: CGFloat
+
+    private var width: CGFloat {
+        height * CGFloat(bitmap.first?.count ?? 1) / CGFloat(bitmap.count)
     }
 
     var body: some View {
         Canvas { ctx, size in
-            let p = size.height / CGFloat(ClawdSprite.rows)
+            let p = size.height / CGFloat(bitmap.count)
             var bodyPath = Path()
             var eyePath = Path()
-            let bitmap = ClawdSprite.frames[frame % ClawdSprite.frames.count]
             for (y, row) in bitmap.enumerated() {
                 for (x, ch) in row.enumerated() where ch != "." {
                     // Overlap neighbours by a hair so antialiasing can't leave seams.
                     let r = CGRect(x: CGFloat(x) * p, y: CGFloat(y) * p, width: p, height: p)
                         .insetBy(dx: -0.15, dy: -0.15)
-                    if ch == "o" { eyePath.addRect(r) } else { bodyPath.addRect(r) }
+                    if ch == "o" || ch == "x" { eyePath.addRect(r) } else { bodyPath.addRect(r) }
                 }
             }
-            ctx.fill(bodyPath, with: .color(ClawdSprite.body))
-            ctx.fill(eyePath, with: .color(.black))
+            ctx.fill(bodyPath, with: .color(color))
+            ctx.fill(eyePath, with: .color(eye))
         }
-        .frame(width: Self.width(forHeight: height), height: height)
+        .frame(width: width, height: height)
     }
 }
 
-// MARK: - Finished toast
+// MARK: - Session toast
 
-/// Clawd sprints across the whole banner left → right — entering from beyond
-/// the blob's edge and leaving past the other — while "<project> session
-/// complete", centred, is painted in behind him as he passes. The notch
-/// folds up shortly after he's gone. Clicking jumps to the session.
+/// One Clawd banner per session event, choreographed by `toast.kind`:
+/// - complete:   sprints the full width, the label painted in behind him.
+/// - permission: trots in, stops beside the label, hops with a blinking "!",
+///               then trots off.
+/// - question:   same, but rocks side to side under a "?".
+/// - failed:     trots in, trips and tips onto his side with X eyes, fades.
+/// Every horizontal move is at the same cruise speed. Clicking jumps to the
+/// session's terminal.
 struct SessionToastView: View {
     let toast: SessionToast
     @EnvironmentObject private var store: ClaudeSessionStore
@@ -146,7 +163,7 @@ struct SessionToastView: View {
 
     /// Notch-expand settle time before Clawd enters.
     private static let lead = 0.30
-    /// Time to cross from fully outside the left edge to fully outside the right.
+    /// Full-width crossing time (complete toast) — defines the cruise speed.
     private static let run = 1.7
     /// Seconds per run-cycle frame.
     private static let stride = 0.085
@@ -155,33 +172,136 @@ struct SessionToastView: View {
     /// Horizontal inset NotchRootView applies to the toast content; the blob
     /// edge (where clipping happens) sits this far outside our bounds.
     private static let edgeInset: CGFloat = 14
+    /// Gap between Clawd and the label when he stops beside it.
+    private static let gap: CGFloat = 8
+    private static let amber = Color(red: 1.0, green: 0.68, blue: 0.20)
+    private static let red   = Color(red: 1.0, green: 0.42, blue: 0.42)
+
+    private static let labelFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+
+    private var labelColor: Color {
+        switch toast.kind {
+        case .complete:              .white
+        case .permission, .question: Self.amber
+        case .failed:                Self.red
+        }
+    }
+
+    /// Measured label width so the Clawd + label group can be centred.
+    private var labelWidth: CGFloat {
+        (toast.message as NSString).size(withAttributes: [.font: Self.labelFont, .kern: -0.1]).width
+    }
+
+    /// Everything the timeline needs to draw one instant.
+    private struct Pose {
+        var x: CGFloat
+        var bitmap: [String]
+        var bob: CGFloat = 0
+        var rot: Double = 0
+        var show = true
+        var opacity: Double = 1
+        var glyph: [String]? = nil
+        var textLeft: CGFloat
+        /// x up to which the label is revealed (nil = fully shown).
+        var reveal: CGFloat?
+    }
+
+    private func pose(at t: TimeInterval, width w: CGFloat) -> Pose {
+        let spriteW = ClawdSprite.width(forHeight: Self.spriteHeight)
+        let inset = Self.edgeInset
+        let speed = (w + 2 * inset + spriteW) / Self.run          // pt per second
+        let dur = { (px: CGFloat) in TimeInterval(px / speed) }
+        let entryX = -inset - spriteW
+        let exitX = w + inset
+        func runFrame(_ since: TimeInterval) -> (bitmap: [String], bob: CGFloat) {
+            let f = Int(max(0, since) / Self.stride) % ClawdSprite.run.count
+            return (ClawdSprite.run[f], f == 1 ? -0.7 : 0)
+        }
+
+        if toast.kind == .complete {
+            let p = min(max((t - Self.lead) / Self.run, 0), 1)
+            let x = entryX + (exitX - entryX) * CGFloat(p)
+            let rf = runFrame(t - Self.lead)
+            return Pose(x: x, bitmap: rf.bitmap, bob: rf.bob, show: t >= Self.lead,
+                        textLeft: (w - labelWidth) / 2, reveal: x + spriteW / 2)
+        }
+
+        // Stop-in-the-middle variants: Clawd + gap + label centred as a group.
+        let groupW = spriteW + Self.gap + labelWidth
+        let stopX = (w - groupW) / 2
+        let textLeft = stopX + spriteW + Self.gap
+        let inDur = dur(stopX - entryX)
+        let arriveT = Self.lead + inDur
+
+        if t < arriveT {
+            let p = min(max((t - Self.lead) / inDur, 0), 1)
+            let x = entryX + (stopX - entryX) * CGFloat(p)            // linear: cruise, then stop
+            let rf = runFrame(t - Self.lead)
+            return Pose(x: x, bitmap: rf.bitmap, bob: rf.bob, show: t >= Self.lead,
+                        textLeft: textLeft, reveal: x + spriteW / 2)
+        }
+
+        switch toast.kind {
+        case .failed:
+            let fallT = arriveT + 0.12, fadeT = 4.0
+            let fp = min(max((t - fallT) / 0.25, 0), 1)
+            let rot = 90 * (1 - pow(1 - fp, 2))                         // tip over, ease-out
+            let opacity = t > fadeT ? max(0, 1 - (t - fadeT) / 0.4) : 1
+            return Pose(x: stopX, bitmap: fp > 0.6 ? ClawdSprite.down : ClawdSprite.stand,
+                        rot: rot, opacity: opacity, textLeft: textLeft, reveal: nil)
+        default:
+            let leaveT = 4.4
+            if t < leaveT {
+                let since = t - arriveT
+                if toast.kind == .permission {
+                    let hop = since.truncatingRemainder(dividingBy: 0.7) / 0.7   // little hop every 0.7 s
+                    let bob: CGFloat = hop < 0.35 ? CGFloat(-3 * sin(hop / 0.35 * .pi)) : 0
+                    let blinkOn = Int(since / 0.35) % 2 == 0
+                    return Pose(x: stopX, bitmap: ClawdSprite.stand, bob: bob,
+                                glyph: blinkOn ? ClawdSprite.bang : nil, textLeft: textLeft, reveal: nil)
+                } else {
+                    let rot = sin(since / 0.9 * 2 * .pi) * 7                 // slow rock
+                    return Pose(x: stopX, bitmap: ClawdSprite.stand, rot: rot,
+                                glyph: ClawdSprite.query, textLeft: textLeft, reveal: nil)
+                }
+            }
+            let outDur = dur(exitX - stopX)
+            let p = min((t - leaveT) / outDur, 1)
+            let x = stopX + (exitX - stopX) * CGFloat(p)
+            let rf = runFrame(t)
+            return Pose(x: x, bitmap: rf.bitmap, bob: rf.bob, textLeft: textLeft, reveal: nil)
+        }
+    }
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            let spriteW = ClawdView.width(forHeight: Self.spriteHeight)
+            let spriteH = Self.spriteHeight
+            let spriteW = ClawdSprite.width(forHeight: spriteH)
             TimelineView(.animation) { ctx in
-                let t = ctx.date.timeIntervalSince(start) - Self.lead
-                let progress = min(max(t / Self.run, 0), 1)
-                let startX = -Self.edgeInset - spriteW
-                let endX = w + Self.edgeInset
-                let x = startX + (endX - startX) * CGFloat(progress)
-                let frame = Int(max(0, t) / Self.stride) % ClawdSprite.frames.count
+                let t = ctx.date.timeIntervalSince(start)
+                let p = pose(at: t, width: w)
+                let revealW: CGFloat = p.reveal.map { max(0, $0 - p.textLeft) } ?? (labelWidth + 4)
                 ZStack(alignment: .leading) {
                     Text(toast.message)
                         .font(.system(size: 12, weight: .semibold))
                         .kerning(-0.1)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(labelColor)
                         .lineLimit(1)
                         .fixedSize()
-                        .frame(maxWidth: .infinity)          // centred in the banner
-                        // Revealed up to Clawd's midline, so it trails in his wake.
-                        .mask(alignment: .leading) {
-                            Rectangle().frame(width: max(0, x + spriteW / 2))
-                        }
-                    ClawdView(frame: frame, height: Self.spriteHeight)
-                        .offset(x: x, y: frame == 1 ? -0.7 : 0)
-                        .opacity(t >= 0 ? 1 : 0)
+                        .mask(alignment: .leading) { Rectangle().frame(width: revealW) }
+                        .offset(x: p.textLeft)
+                        .opacity(p.opacity)
+                    PixelBitmap(bitmap: p.bitmap, height: spriteH)
+                        // The "down" bitmap is 2×; PixelBitmap sizes by row count.
+                        .frame(width: spriteW, height: spriteH)
+                        .rotationEffect(.degrees(p.rot), anchor: toast.kind == .failed ? .bottomTrailing : .center)
+                        .offset(x: p.x, y: p.bob)
+                        .opacity(p.show ? p.opacity : 0)
+                    if let glyph = p.glyph {
+                        PixelBitmap(bitmap: glyph, color: labelColor, height: 5)
+                            .offset(x: p.x + spriteW / 2 - 1.5, y: -(spriteH / 2 + 4.5) + p.bob)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }

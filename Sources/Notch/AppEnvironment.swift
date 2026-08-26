@@ -73,8 +73,24 @@ final class AppEnvironment: ObservableObject {
             .store(in: &cancellables)
         claude.onAttention = { [weak self] s in
             notchLog("claude-sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
-            if s.state == .done { self?.notch.presentSessionToast(SessionToast(session: s)) }
+            let kind: SessionToast.Kind
+            switch s.state {
+            case .done:    kind = .complete
+            case .failed:  kind = .failed
+            case .waiting: kind = s.waitingReason == .question ? .question : .permission
+            default:       return
+            }
+            self?.notch.presentSessionToast(SessionToast(session: s, kind: kind))
         }
+        // A needs-you toast is moot once the user has answered (or the
+        // session is gone): fold it away early.
+        claude.$sessions
+            .sink { [weak self] sessions in
+                guard let self, case .session(let t) = self.notch.toast, t.kind.needsYou else { return }
+                if let live = sessions.first(where: { $0.id == t.session.id }), live.needsAttention { return }
+                self.notch.dismissToast()
+            }
+            .store(in: &cancellables)
         claude.start()
     }
 }
@@ -85,14 +101,34 @@ struct ScreenshotToast: Equatable {
     let message: String
 }
 
-/// Transient "<project> Claude session finished" banner.
+/// Transient Clawd banner for a session event.
 struct SessionToast: Equatable {
+    enum Kind: Equatable {
+        case complete, permission, question, failed
+        /// Blocked on the user — stays up longer, dismissed early once answered.
+        var needsYou: Bool { self == .permission || self == .question }
+        /// How long the notch stays open.
+        var duration: TimeInterval {
+            switch self {
+            case .complete:   2.7
+            case .permission: 5.6
+            case .question:   5.6
+            case .failed:     4.6
+            }
+        }
+    }
     let session: ClaudeSession
+    let kind: Kind
     /// Long folder names get clipped so the banner still fits `toastSize`.
     var message: String {
         let name = session.projectName
         let shown = name.count > 14 ? String(name.prefix(13)) + "…" : name
-        return "\(shown) session complete"
+        switch kind {
+        case .complete:   return "\(shown) session complete"
+        case .permission: return "\(shown) needs permission"
+        case .question:   return "\(shown) has a question"
+        case .failed:     return "\(shown) session failed"
+        }
     }
 }
 
@@ -231,13 +267,13 @@ final class NotchState: ObservableObject {
         scheduleClose(after: 2.35)
     }
 
-    /// Pop the notch open with a "<project> Claude session finished" banner.
+    /// Pop the notch open with a Clawd banner for a session event.
     func presentSessionToast(_ t: SessionToast) {
         closeWork?.cancel(); closeWork = nil
         toast = .session(t)
         sessionsPanelExpanded = false
         isOpen = true
-        pinnedUntil = Date().addingTimeInterval(2.6)
-        scheduleClose(after: 2.7)
+        pinnedUntil = Date().addingTimeInterval(t.kind.duration - 0.1)
+        scheduleClose(after: t.kind.duration)
     }
 }
