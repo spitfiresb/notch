@@ -30,6 +30,16 @@ every rebuild, so macOS may forget Audio-capture / Automation grants after a reb
 fine for development — the onboarding flow (shown on first launch) walks through re-granting.
 For a stable build, sign with a real (even self-signed) certificate instead of `-`.
 
+Two consequences worth knowing during development:
+
+- **Keychain prompt on every rebuild.** The Spotify refresh token lives in the keychain under
+  `Notch.Spotify`, and a new ad-hoc signature means a new "Notch wants to use your keychain" dialog
+  on launch. The app doesn't finish starting until you click *Allow* — if the notch hasn't appeared
+  after `./build.sh run`, look for that dialog. `spotify: synced` in the log means it's through.
+- **Accessibility doesn't reset from the Settings toggle.** Flipping Notch off/on in
+  System Settings → Accessibility doesn't clear a stale ad-hoc grant. To start clean:
+  `tccutil reset Accessibility com.spitfiresb.notch`.
+
 Freshly built binaries also get a one-time XProtect/Gatekeeper scan on first launch — a brief
 CPU burst right after `./build.sh run` is the scanner, not the app.
 
@@ -43,20 +53,49 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
   `NotchShape`, and two-finger-swipe tab switching.
 - `Window/SettingsWindowController.swift` — standalone settings window (opened from the gear in
   the expanded notch).
-- `Views/NotchRootView.swift` — the blob: collapsed peek ↔ expanded morph, toast, dancing bars.
-- `Views/Tabs.swift` — Music and Screenshots tab UIs, including the scrubber, save/like button,
-  and the expanding "Saved in" playlist panel.
-- `Views/OnboardingView.swift` — first-run permissions walkthrough.
-- `Views/SettingsView.swift` — launch-at-login, screenshot routing / clipboard toggles, and the
-  Spotify connect / sync / disconnect controls.
+- `Views/NotchRootView.swift` — the blob: collapsed peek ↔ expanded morph, toasts (screenshot +
+  Claude session), dancing bars, the Claude spinner beside the bars.
+- `Views/Tabs.swift` — Music and Screenshots tab UIs, including the scrubber, `MarqueeText`
+  (Spotify-style scrolling for titles that don't fit), save/like button, and the expanding
+  "Saved in" playlist panel.
+- `Views/ClaudeSessionsUI.swift` — `ClaudeSpinner`, the bottom-right `SessionsCorner` that unfolds
+  `SessionsPanel` (one row per `claude` process), and `SessionToastView` with Clawd.
+- `Views/OnboardingView.swift` — first-run walkthrough: welcome → permissions → optional Spotify
+  Library → done.
+- `Views/SettingsView.swift` — launch-at-login, Claude Code sessions toggle, screenshot routing /
+  clipboard / cleanup, and the Spotify connect / bring-your-own-client-ID controls.
+- `PermissionPrompt/` — the guided-permissions overlay: `PermissionPromptAssistant` decides
+  between the native consent prompt and opening System Settings; `PermissionOverlayWindow` floats
+  a non-activating panel next to the privacy pane (`PermissionDragRow` / `PermissionToggleRow`
+  animate what to do); `SettingsWindowLocator` tracks the Settings window without Screen Recording.
 - `Services/AudioMeter.swift` — CoreAudio process tap → six bandpass-filtered levels driving the bars.
 - `Services/NowPlaying.swift` — `MediaRemoteBridge` (private framework, system "Now Playing") with a
   Spotify-via-Apple-Events fallback (event-driven via Spotify's `PlaybackStateChanged` notification).
 - `Services/SpotifyLibrary.swift` — Spotify Web API client: PKCE OAuth with a loopback redirect,
   a local snapshot-diffed mirror of your playlists, and like / add-to-playlist writes.
-- `Services/ScreenshotWatcher.swift` — screenshot detection, toast + optional clipboard copy / folder routing.
+- `Services/ClaudeHooks.swift` — writes `~/Library/Application Support/Notch/claude-hook.sh` and
+  adds/removes the matching hook entries in `~/.claude/settings.json` (only entries pointing at our
+  script are ever touched).
+- `Services/ClaudeSessions.swift` — `ClaudeSessionStore`: tails the spool
+  (`~/Library/Application Support/Notch/claude-events.jsonl`) via a vnode source + 1 s poll,
+  replays it on launch, folds events into per-session state, dedupes by pid, reaps dead
+  processes, and focuses the session's Terminal tab (by tty) or VS Code window (by title).
+- `Services/ScreenshotWatcher.swift` — screenshot detection, toast + optional clipboard copy,
+  and "clean up" (trash every screenshot in the folder).
 - `Services/SpaceAttacher.swift` — pins the panel to every Space via private CGS calls.
 - `Services/TrackpadGestureMonitor.swift` — tracks live trackpad gestures so Space swipes aren't fought.
 - `Services/Permissions.swift` — TCC checks + System Settings deep links used by onboarding.
-- `Services/SettingsStore.swift` — persisted user preferences.
+- `Services/SettingsStore.swift` — persisted user preferences; also owns the
+  `com.apple.screencapture.location` routing to `~/Pictures/Screenshots`.
 - `Services/DebugLog.swift` — `notchLog` helper; writes `~/Library/Logs/Notch/notch.log` (`./build.sh logs`).
+
+## Debugging Claude sessions
+
+- Events land in `~/Library/Application Support/Notch/claude-events.jsonl`; every one is also
+  logged (`./build.sh logs`). Notch truncates the spool after replaying it on launch.
+- To fake a finished session without running Claude, append a `Stop` event line with a
+  made-up pid (e.g. `"pid":99999`) to the spool, then a `SessionEnd` line to clear the row.
+- Toast variants (`SessionToast.Kind`): complete, permission, question, failed. Attention
+  callbacks are muted during the launch replay so a backlog doesn't fire a burst of toasts.
+- Claude Code hot-reloads hooks, so toggling the Settings switch affects sessions that are
+  already running.
