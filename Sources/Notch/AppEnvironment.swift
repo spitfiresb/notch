@@ -10,6 +10,7 @@ final class AppEnvironment: ObservableObject {
     let screenshots = ScreenshotWatcher()
     let audioMeter = AudioMeter()
     let settings = SettingsStore()
+    let claude = ClaudeSessionStore()
 
     private var cancellables = Set<AnyCancellable>()
     /// Pending delayed audio-meter teardown after playback pauses.
@@ -62,6 +63,35 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] _ in self?.screenshots.rebindToCurrentDirectory() }
             .store(in: &cancellables)
         screenshots.start()
+        // Claude Code sessions: install hooks once on first launch (toggle in
+        // Settings removes them), then tail the event spool.
+        if settings.claudeSessionsEnabled && !ClaudeHooks.isInstalled { ClaudeHooks.install() }
+        settings.$claudeSessionsEnabled
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] on in self?.claude.setHooksEnabled(on) }
+            .store(in: &cancellables)
+        claude.onAttention = { [weak self] s in
+            notchLog("claude-sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
+            let kind: SessionToast.Kind
+            switch s.state {
+            case .done:    kind = .complete
+            case .failed:  kind = .failed
+            case .waiting: kind = s.waitingReason == .question ? .question : .permission
+            default:       return
+            }
+            self?.notch.presentSessionToast(SessionToast(session: s, kind: kind))
+        }
+        // A needs-you toast is moot once the user has answered (or the
+        // session is gone): fold it away early.
+        claude.$sessions
+            .sink { [weak self] sessions in
+                guard let self, case .session(let t) = self.notch.toast, t.kind.needsYou else { return }
+                if let live = sessions.first(where: { $0.id == t.session.id }), live.needsAttention { return }
+                self.notch.dismissToast()
+            }
+            .store(in: &cancellables)
+        claude.start()
     }
 }
 
@@ -69,6 +99,42 @@ final class AppEnvironment: ObservableObject {
 struct ScreenshotToast: Equatable {
     let url: URL
     let message: String
+}
+
+/// Transient Clawd banner for a session event.
+struct SessionToast: Equatable {
+    enum Kind: Equatable {
+        case complete, permission, question, failed
+        /// Blocked on the user — stays up longer, dismissed early once answered.
+        var needsYou: Bool { self == .permission || self == .question }
+        /// How long the notch stays open.
+        var duration: TimeInterval {
+            switch self {
+            case .complete:   2.7
+            case .permission: 5.6
+            case .question:   5.6
+            case .failed:     4.6
+            }
+        }
+    }
+    let session: ClaudeSession
+    let kind: Kind
+    /// Long folder names get clipped so the banner still fits `toastSize`.
+    var message: String {
+        let name = session.projectName
+        let shown = name.count > 14 ? String(name.prefix(13)) + "…" : name
+        switch kind {
+        case .complete:   return "\(shown) session complete"
+        case .permission: return "\(shown) needs permission"
+        case .question:   return "\(shown) has a question"
+        case .failed:     return "\(shown) session failed"
+        }
+    }
+}
+
+enum NotchToast: Equatable {
+    case screenshot(ScreenshotToast)
+    case session(SessionToast)
 }
 
 /// Open / closed state of the notch panel plus which tab is showing.
@@ -89,10 +155,29 @@ final class NotchState: ObservableObject {
     @Published var tab: Tab = .music {
         didSet { if tab != .music { musicPanelExpanded = false } }
     }
-    @Published var toast: ScreenshotToast?
+    /// Claude sessions panel unfolded beneath the current tab — opened by
+    /// hovering the spinner in the panel's bottom-right corner.
+    @Published var sessionsPanelExpanded = false {
+        didSet { if sessionsPanelExpanded { musicPanelExpanded = false } }
+    }
+    /// Either downward extension is showing.
+    var isTallOpen: Bool { isOpen && ((tab == .music && musicPanelExpanded) || sessionsPanelExpanded) }
+    /// Blob size while open. The sessions panel is only as tall as its rows
+    /// (capped at the music-panel height, the window's fixed size).
+    func openBlobSize(sessionRows: Int) -> CGSize {
+        guard isOpen else { return ScreenMetrics.notchSize }
+        if tab == .music && musicPanelExpanded { return ScreenMetrics.expandedMusicSize }
+        guard sessionsPanelExpanded else { return ScreenMetrics.expandedSize }
+        let h = ScreenMetrics.expandedSize.height + SessionsPanel.height(rows: sessionRows) + 10
+        return CGSize(width: ScreenMetrics.expandedSize.width,
+                      height: min(h, ScreenMetrics.expandedMusicSize.height))
+    }
+    @Published var toast: NotchToast?
     /// Music tab's taller state — the "Saved in" playlist panel unfolded
     /// beneath the transport controls.
-    @Published var musicPanelExpanded = false
+    @Published var musicPanelExpanded = false {
+        didSet { if musicPanelExpanded { sessionsPanelExpanded = false } }
+    }
 
     /// `true` while Mission Control / App Exposé / Launchpad / Show Desktop is on
     /// screen. The panel is fully hidden then so it doesn't cover the system overlay.
@@ -124,6 +209,7 @@ final class NotchState: ObservableObject {
         toast = nil
         isOpen = false
         musicPanelExpanded = false
+        sessionsPanelExpanded = false
         scheduleTabRevert()
     }
 
@@ -174,10 +260,20 @@ final class NotchState: ObservableObject {
     /// Pop the notch open with a "screenshot copied" banner; auto-collapses after a beat.
     func presentScreenshotToast(url: URL) {
         closeWork?.cancel(); closeWork = nil
-        toast = ScreenshotToast(url: url, message: "Screenshot copied to clipboard")
+        toast = .screenshot(ScreenshotToast(url: url, message: "Screenshot copied to clipboard"))
         tab = .screenshots          // what's revealed if the banner is dismissed early
         isOpen = true
         pinnedUntil = Date().addingTimeInterval(2.25)
         scheduleClose(after: 2.35)
+    }
+
+    /// Pop the notch open with a Clawd banner for a session event.
+    func presentSessionToast(_ t: SessionToast) {
+        closeWork?.cancel(); closeWork = nil
+        toast = .session(t)
+        sessionsPanelExpanded = false
+        isOpen = true
+        pinnedUntil = Date().addingTimeInterval(t.kind.duration - 0.1)
+        scheduleClose(after: t.kind.duration)
     }
 }

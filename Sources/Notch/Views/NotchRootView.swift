@@ -5,6 +5,7 @@ import SwiftUI
 /// a blob that grows/shrinks within it, so open/close is one smooth SwiftUI animation.
 struct NotchRootView: View {
     @EnvironmentObject private var notch: NotchState
+    @EnvironmentObject private var claude: ClaudeSessionStore
 
     /// Shared namespace for `matchedGeometryEffect` on the album art and dancing
     /// bars — lets SwiftUI morph those elements between the peek's small layout
@@ -20,10 +21,7 @@ struct NotchRootView: View {
 
     private var blobSize: CGSize {
         if notch.toast != nil { return ScreenMetrics.toastSize }
-        guard notch.isOpen else { return ScreenMetrics.notchSize }
-        return notch.tab == .music && notch.musicPanelExpanded
-            ? ScreenMetrics.expandedMusicSize
-            : ScreenMetrics.expandedSize
+        return notch.openBlobSize(sessionRows: claude.sessions.count)
     }
     private var bottomRadius: CGFloat {
         if notch.toast != nil { return 16 }
@@ -76,6 +74,8 @@ struct NotchRootView: View {
         .animation(transitionAnim, value: notch.isOpen)
         .animation(Self.openAnim, value: notch.tab)
         .animation(Self.openAnim, value: notch.musicPanelExpanded)
+        .animation(Self.openAnim, value: notch.sessionsPanelExpanded)
+        .animation(Self.openAnim, value: claude.sessions.count)
         .animation(transitionAnim, value: notch.toast)
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }
@@ -93,12 +93,27 @@ struct NotchRootView: View {
             Group {
                 if notch.toast == nil {
                     if notch.isOpen {
-                        tabContent
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .padding(.horizontal, 22)
-                            .padding(.top, 10)
-                            .padding(.bottom, 10)
-                            .foregroundStyle(.white)
+                        // The tab keeps its normal height; the sessions panel
+                        // (when unfolded) takes the extra space underneath, so
+                        // nothing in the tab moves.
+                        VStack(spacing: 0) {
+                            tabContent
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .frame(height: notch.sessionsPanelExpanded
+                                       ? ScreenMetrics.expandedSize.height - 20 : nil)
+                                .padding(.horizontal, 22)
+                                .padding(.top, 10)
+                                .padding(.bottom, 10)
+                            if notch.sessionsPanelExpanded {
+                                SessionsPanel()
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                                    .padding(.horizontal, 22)
+                                    .padding(.bottom, 10)
+                                    .transition(.opacity)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .foregroundStyle(.white)
                     } else {
                         CollapsedPeek(namespace: chromeNS)
                     }
@@ -107,11 +122,26 @@ struct NotchRootView: View {
             .animation(transitionAnim, value: notch.isOpen)
 
             if let toast = notch.toast {
-                ScreenshotToastView(toast: toast)
-                    .padding(.horizontal, 14)
-                    .foregroundStyle(.white)
-                    .transition(.opacity)
+                Group {
+                    switch toast {
+                    case .screenshot(let t): ScreenshotToastView(toast: t)
+                    case .session(let t):    SessionToastView(toast: t)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .foregroundStyle(.white)
+                .transition(.opacity)
             }
+
+            // Claude spinner in the bottom-right corner of the tab area while a
+            // session is working; hovering it unfolds the sessions panel.
+            SessionsCorner()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.top, SessionsCorner.stripTopInset)
+                .padding(.trailing, 22)
+                .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
+                .allowsHitTesting(notch.isOpen && notch.toast == nil)
+                .animation(.easeOut(duration: 0.22), value: notch.isOpen)
 
             // Tiny settings gear, top-right of the expanded panel. Sits just past
             // where the music tab's dancing bars end; grows on hover.
@@ -189,6 +219,7 @@ private struct SettingsGearButton: View {
 private struct CollapsedPeek: View {
     let namespace: Namespace.ID
     @EnvironmentObject private var music: NowPlayingManager
+    @EnvironmentObject private var claude: ClaudeSessionStore
 
     /// Show whenever there's *any* track loaded; we just freeze the bars when paused
     /// so the user can still see what's playing at a glance.
@@ -202,16 +233,27 @@ private struct CollapsedPeek: View {
                 .frame(width: 14, height: 14)
                 .clipShape(Rectangle())
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
-                .opacity(music.displayArt != nil ? 1 : 0)
+                .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
             DancingBars(color: music.displayAccent,
                         isPlaying: music.info.isPlaying)
                 .frame(width: 20, height: 14)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
+                .opacity(showing ? 1 : 0)
+            // While a Claude session is working, its spinner slides in at the
+            // right edge and nudges the bars left; gone again when it finishes.
+            if claude.anyActive {
+                ClaudeSpinner(state: claude.headlineState, size: 13)
+                    // The asterisk glyphs carry more ink below centre, so a
+                    // geometrically centred spinner reads low next to the bars.
+                    .offset(y: -1)
+                    .padding(.leading, 8)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .padding(.horizontal, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .opacity(showing ? 1 : 0)
+        .animation(.spring(response: 0.36, dampingFraction: 0.8), value: claude.anyActive)
         .animation(Self.trackFade, value: music.displayKey)
         .animation(Self.trackFade, value: music.displayAccent)
     }

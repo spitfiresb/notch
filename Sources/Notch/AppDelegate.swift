@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(env.screenshots)
             .environmentObject(env.audioMeter)
             .environmentObject(env.settings)
+            .environmentObject(env.claude)
         let panel = NotchPanel(rootView: root)
         self.panel = panel
         panel.show()
@@ -140,11 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The window is always the tallest (music-expanded) size; the visible
         // blob may be smaller, so hover-tracking follows the blob, not the frame.
         let wf = panel.frame
-        let blobSize: CGSize = notch.isOpen
-            ? (notch.tab == .music && notch.musicPanelExpanded
-               ? ScreenMetrics.expandedMusicSize
-               : ScreenMetrics.expandedSize)
-            : ScreenMetrics.notchSize
+        let blobSize = notch.openBlobSize(sessionRows: env.claude.sessions.count)
         let blobRect = NSRect(x: wf.midX - blobSize.width / 2,
                               y: wf.maxY - blobSize.height,
                               width: blobSize.width,
@@ -171,6 +168,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             notch.cancelScheduledClose()
             if !notch.isOpen {
                 notch.open()
+            } else if notch.sessionsPanelExpanded,
+                      mouse.y > blobRect.maxY - SessionsCorner.stripTopInset {
+                // Cursor moved back up into the regular tab area (above the
+                // spinner strip that opened the panel) — fold the panel away.
+                notch.sessionsPanelExpanded = false
+            } else if !notch.sessionsPanelExpanded, notch.toast == nil, env.claude.anyActive,
+                      SessionsCorner.hitRect(inBlob: blobRect).contains(mouse) {
+                // Hovering the Claude spinner in the bottom-right corner
+                // unfolds the sessions panel. Done here (geometry) rather than
+                // via SwiftUI's onHover so it can't miss a fast cursor.
+                notch.sessionsPanelExpanded = true
             } else if notch.toast != nil && !notch.isPinnedOpen {
                 notch.dismissToast()   // banner's time is up — reveal the tabs underneath
             }

@@ -24,6 +24,18 @@ struct SettingsView: View {
                 Text("General")
             }
             Section {
+                Toggle(isOn: $settings.claudeSessionsEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show live Claude Code sessions")
+                        Text("Adds hook entries to ~/.claude/settings.json so each session reports what it's doing. Sessions already running pick this up on their next restart.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Claude Code")
+            }
+            Section {
                 Toggle(isOn: $settings.routeScreenshotsToFolder) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Save screenshots to a Screenshots folder")
