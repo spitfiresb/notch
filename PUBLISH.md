@@ -66,8 +66,13 @@ remaining. See `BUILD.md` for the day-to-day build workflow.
       minimum: no crash, nothing rendered off-screen.
 - [ ] Test full onboarding on a fresh macOS account (zero TCC grants): every
       permission prompt appears; denial paths don't wedge the app.
-- [ ] Audit for remaining personal assumptions (hardcoded paths, screenshot
-      folder location, etc.).
+- [x] Screenshot folder: default routes to `~/Pictures/Screenshots` via the
+      system `screencapture` preference (no Files & Folders grant needed);
+      "Keep Desktop" remains as the permission-requiring alternative.
+- [x] Guided permission flow: onboarding opens the exact System Settings pane
+      with an overlay showing what to do (drag row / flip toggle) instead of
+      leaving the user to find it.
+- [ ] Audit for remaining personal assumptions (hardcoded paths etc.).
 
 ### 4. Distribution & updates
 
@@ -84,9 +89,19 @@ remaining. See `BUILD.md` for the day-to-day build workflow.
 
 - [ ] README install section: brew one-liner + DMG with an "Open Anyway"
       walkthrough (screenshot of the Settings dialog).
-- [ ] Permissions section: what each TCC grant is for; note the re-grant
-      caveat under ad-hoc signing.
-- [ ] Spotify BYO-client-ID setup, mirrored from the in-app walkthrough.
+- [x] Permissions section: what each TCC grant is for (README table); the
+      re-grant caveat under ad-hoc signing lives in BUILD.md.
+- [ ] Spotify BYO-client-ID setup, mirrored from the in-app walkthrough
+      (README currently points at the in-app Settings walkthrough).
+
+### 6. Claude Code sessions (shipped in PR #13)
+
+- [x] Hook install/uninstall scoped to our own entries in `~/.claude/settings.json`.
+- [x] Spool-file transport, launch replay, pid-based dedupe, Terminal / VS Code focus.
+- [ ] Per-turn token counts (from transcript `usage`) in the session rows.
+- [ ] Stable dev signing (self-signed "Notch Dev" identity in `build.sh`) so the
+      keychain prompt stops firing on every rebuild — also helps the TCC caveat above.
+- [ ] Surface `error_type` in the failed-turn toast label.
 
 ## Suggested order
 

@@ -41,7 +41,7 @@
 
 - **Now Playing, from anywhere**: reads the system's Now Playing data (the same source Control Center uses), with a Spotify Apple-Events fallback for macOS versions that lock MediaRemote down. Play/pause, skip, and seek from the notch.
 - **Real audio visualization**: a CoreAudio process tap feeds six log-spaced bandpass filters (80 Hz to 7 kHz); each bar is a real frequency band with its own attack/release envelope. Not a canned animation.
-- **Screenshots tab**: watches for new screenshots, pops a toast, optionally copies them straight to the clipboard and routes them into a tidy folder. Swipe horizontally on the trackpad to switch tabs.
+- **Screenshots tab**: watches for new screenshots, pops a toast, optionally copies them straight to the clipboard and routes them into `~/Pictures/Screenshots` (via the system `screencapture` preference, so no folder permission is needed). A one-click cleanup moves every screenshot in the folder to the Trash. Swipe horizontally on the trackpad to switch tabs.
 
   ![Screenshot toast and screenshots tab](docs/assets/screenshot-demo.gif)
 
@@ -51,6 +51,8 @@
   ![Saved-in panel](docs/assets/saved-in.png)
 
   *The save button unfolded: the current track is in Liked Songs; the rows below add it to any other playlist with one click.*
+- **Live Claude Code sessions**: turn it on in Settings and Notch installs hook entries in `~/.claude/settings.json`, so every `claude` running in Terminal.app or VS Code reports what it's doing. While a session works, the CLI's own spinner glyph (`· ✢ ✳ ∗ ✻ ✽`, in Claude orange) sits beside the music bars in the collapsed pill and in the bottom-right corner of the open notch; hover the corner and a panel unfolds with one row per session (project, branch, state, elapsed time) — click a row to jump to its terminal tab. When a turn finishes, needs a permission, asks a question or fails, Clawd (the pixel mascot) sprints across the notch with a toast. Everything happens in the notch: no extra tab, no window.
+- **Long titles scroll**: a podcast title that doesn't fit the player holds still, then glides through Spotify-style and loops — no `…` truncation.
 - **Stays out of the way**: no Dock icon, no menu bar item. It pins itself across every Space (including full-screen apps), ducks off-screen when Mission Control or App Exposé takes over, and launches at login (toggleable in Settings). Switch to the Screenshots tab and it stays your tab for 30 seconds of inactivity before reverting to Music.
 
 ## Why it's interesting under the hood
@@ -67,6 +69,10 @@ This is not a menu-bar-app template. A few of the problems it solves:
 
 **First-class trackpad feel.** Two-finger horizontal swipes switch tabs (with haptic ticks), respecting natural-scrolling direction, and a gesture monitor keeps the panel from fighting the system during live Space swipes.
 
+**Watching Claude Code without a daemon.** Claude Code runs a shell command on every lifecycle hook and pipes it JSON. Notch's hook is a ten-line script that stamps the payload with a timestamp and its parent pid and appends it to a spool file; `ClaudeSessionStore` tails the file with a kqueue vnode source (plus a 1 Hz poll as a safety net), replays it on launch, and rebuilds every session's state machine (idle → thinking → tool → waiting → done/failed) from the event stream. Sessions are matched to their `claude` process by executable path via `sysctl` — the native binary's `p_comm` is its version string, so name matching doesn't work — and the terminal tab is found by tty (Terminal.app) or window title (VS Code). Events buffer while Notch isn't running, and the hook never blocks or fails a session.
+
+**Guided permissions.** Instead of "go enable it in System Settings", the onboarding opens the exact privacy pane and floats a small overlay beside it showing what to do — an animated drag-into-the-list for Accessibility, a flip-the-toggle for Automation and Files & Folders — that tracks the Settings window and dismisses itself the moment the grant lands.
+
 ## Getting started
 
 ```bash
@@ -81,11 +87,16 @@ On first launch an onboarding window walks through the permissions it wants:
 
 | Permission | Used for | Optional? |
 |---|---|---|
-| Audio capture | The dancing bars (system audio tap) | Yes (bars fall back to a synthesized wiggle) |
+| Accessibility | Keeping the notch above other windows and interactive; focusing Claude session windows | **Required** |
 | Automation (Spotify) | Track info + controls when MediaRemote is unavailable | Yes (if you don't use Spotify) |
-| Screenshot folder access | The screenshots tab & toasts | Yes |
+| Files & Folders (Desktop) | The screenshots tab, only if you keep saving screenshots to the Desktop | Yes — the default routes screenshots to `~/Pictures/Screenshots`, which needs no grant |
 
-Connecting your Spotify account (for the like button and saved-in panel) is separate from these: it's a standard OAuth login started from the notch's save button or Settings, and the token lives in your keychain.
+The audio tap for the dancing bars prompts on its own the first time music plays; deny it and the bars fall back to a synthesized wiggle.
+
+Two things are set up separately from these:
+
+- **Spotify account** (like button, saved-in panel): a standard OAuth login started from the notch's save button or Settings; the token lives in your keychain. Spotify's dev-mode rules mean you bring your own client ID — Settings → Spotify walks through creating the (free) app and pasting the ID in.
+- **Claude Code sessions**: Settings → Claude Code → "Show live Claude Code sessions" writes the hook entries into `~/.claude/settings.json` (and removes exactly those entries when switched off). Running sessions pick the hooks up without a restart.
 
 ## Architecture
 
@@ -97,15 +108,19 @@ Sources/Notch/
 │   ├── NotchPanel.swift               Borderless panel, NotchShape, swipe detection
 │   └── SettingsWindowController.swift
 ├── Views/
-│   ├── NotchRootView.swift            The blob: collapsed peek ↔ expanded morph
-│   ├── Tabs.swift                     Music & Screenshots tabs, scrubber, saved-in panel
+│   ├── NotchRootView.swift            The blob: collapsed peek ↔ expanded morph, toasts
+│   ├── Tabs.swift                     Music & Screenshots tabs, scrubber, marquee, saved-in panel
+│   ├── ClaudeSessionsUI.swift         Claude spinner, sessions panel, Clawd toast
 │   ├── OnboardingView.swift           First-run permissions walkthrough
 │   └── SettingsView.swift
+├── PermissionPrompt/                  Guided System Settings overlay (drag-row / toggle variants)
 └── Services/
     ├── AudioMeter.swift               CoreAudio process tap → 6-band levels
     ├── NowPlaying.swift               MediaRemote bridge + Spotify fallback
     ├── SpotifyLibrary.swift           Spotify Web API: OAuth (PKCE), library mirror, likes
-    ├── ScreenshotWatcher.swift        Screenshot detection & routing
+    ├── ClaudeHooks.swift              Installs/removes the Claude Code hook entries + spool script
+    ├── ClaudeSessions.swift           Tails the spool, rebuilds session state, focuses terminals
+    ├── ScreenshotWatcher.swift        Screenshot detection, routing & cleanup
     ├── SpaceAttacher.swift            Private CGS space pinning
     ├── TrackpadGestureMonitor.swift   Live-gesture detection
     ├── Permissions.swift              TCC checks & System Settings deep links
