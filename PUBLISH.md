@@ -91,6 +91,9 @@ remaining. See `BUILD.md` for the day-to-day build workflow.
       walkthrough (screenshot of the Settings dialog).
 - [x] Permissions section: what each TCC grant is for (README table); the
       re-grant caveat under ad-hoc signing lives in BUILD.md.
+- [x] Claude Code sessions: its own README section with captures (spinner,
+      panel, Clawd toasts) and a setup subsection showing exactly what the
+      toggle writes to `~/.claude/settings.json`.
 - [ ] Spotify BYO-client-ID setup, mirrored from the in-app walkthrough
       (README currently points at the in-app Settings walkthrough).
 

@@ -99,3 +99,7 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
   callbacks are muted during the launch replay so a backlog doesn't fire a burst of toasts.
 - Claude Code hot-reloads hooks, so toggling the Settings switch affects sessions that are
   already running.
+- The README's Claude captures (`docs/assets/claude-*.png`, `clawd-*.gif`) are real: the
+  stills are `screencapture -R` of the notch region (the panel sits at x≈570, 300 pt wide)
+  with a live session, and the GIFs are `screencapture -V` recordings cut with ffmpeg while
+  fake `Stop` / `PermissionRequest` lines were appended to the spool as above.
