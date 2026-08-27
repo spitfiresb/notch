@@ -160,8 +160,6 @@ final class NotchState: ObservableObject {
     @Published var sessionsPanelExpanded = false {
         didSet { if sessionsPanelExpanded { musicPanelExpanded = false } }
     }
-    /// Either downward extension is showing.
-    var isTallOpen: Bool { isOpen && ((tab == .music && musicPanelExpanded) || sessionsPanelExpanded) }
     /// Blob size while open. The sessions panel is only as tall as its rows
     /// (capped at the music-panel height, the window's fixed size).
     func openBlobSize(sessionRows: Int) -> CGSize {

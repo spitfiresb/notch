@@ -125,7 +125,6 @@ final class ClaudeSessionStore: ObservableObject {
             return a.lastEventAt > b.lastEventAt
         }
     }
-    var attentionCount: Int { sessions.filter(\.needsAttention).count }
     /// A session is mid-task: working, or blocked on you to keep working.
     var anyActive: Bool { sessions.contains { $0.isBusy || $0.needsAttention } }
     /// What the single collapsed-pill spinner should express: needs-you wins

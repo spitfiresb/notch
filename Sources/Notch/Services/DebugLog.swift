@@ -28,7 +28,7 @@ func notchLog(_ msg: String) {
     }
     if let fh = try? FileHandle(forWritingTo: notchLogURL) {
         defer { _ = try? fh.close() }
-        try? fh.seekToEnd()
+        _ = try? fh.seekToEnd()
         try? fh.write(contentsOf: data)
     }
 }

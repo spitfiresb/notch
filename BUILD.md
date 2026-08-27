@@ -45,21 +45,26 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
 
 ## Architecture (quick map)
 
-- `main.swift` / `AppDelegate.swift` — AppKit entry point; owns the panel, hover watcher
+- `App/main.swift` / `App/AppDelegate.swift` — AppKit entry point; owns the panel, hover watcher
   (mouse-moved event monitors), Mission Control detection, and Space re-attachment.
-- `AppEnvironment.swift` — observable app state (`NotchState` + services), injected into SwiftUI;
+- `App/AppEnvironment.swift` — observable app state (`NotchState` + services), injected into SwiftUI;
   gates the audio meter so the system tap only runs while music is playing.
 - `Window/NotchPanel.swift` — borderless floating `NSPanel` pinned top-centre; `ScreenMetrics`,
   `NotchShape`, and two-finger-swipe tab switching.
 - `Window/SettingsWindowController.swift` — standalone settings window (opened from the gear in
   the expanded notch).
 - `Views/NotchRootView.swift` — the blob: collapsed peek ↔ expanded morph, toasts (screenshot +
-  Claude session), dancing bars, the Claude spinner beside the bars.
-- `Views/Tabs.swift` — Music and Screenshots tab UIs, including the scrubber, `MarqueeText`
-  (Spotify-style scrolling for titles that don't fit), save/like button, and the expanding
-  "Saved in" playlist panel.
-- `Views/ClaudeSessionsUI.swift` — `ClaudeSpinner`, the bottom-right `SessionsCorner` that unfolds
-  `SessionsPanel` (one row per `claude` process), and `SessionToastView` with Clawd.
+  Claude session), the Claude spinner beside the bars. `Views/DancingBars.swift` is the six
+  audio-reactive bars it shares with the collapsed peek.
+- `Views/Music/` — the Music tab, one type per file: `MusicTabView`, `TransportButtons`
+  (⏮ ⏯ ⏭), `MusicProgressLine` (scrubber), `MarqueeText` (Spotify-style scrolling for titles that
+  don't fit), `SaveButton` (+ confetti burst), and the expanding `SavedInPanel` playlist list.
+- `Views/Screenshots/` — `ScreenshotTabView` (thumbnail strip), `ScreenshotToastView` (copied
+  banner), and `ScreenshotImage` (thumbnail loading / relative timestamps).
+- `Views/Claude/` — `SessionsCorner` (spinner parked bottom-right, unfolds the panel),
+  `SessionsPanel` (one row per `claude` process), `ClawdSprite` (the pixel mascot), and
+  `SessionToastView` (Clawd's choreographed banners).
+- `Views/Shared/` — `EmptyTab` placeholder and the `Haptics` helper.
 - `Views/OnboardingView.swift` — first-run walkthrough: welcome → permissions → optional Spotify
   Library → done.
 - `Views/SettingsView.swift` — launch-at-login, Claude Code sessions toggle, screenshot routing /
