@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.evaluateHover() }
             return event
         }
-        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.evaluateHover() }
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.evaluateHover() } }
         RunLoop.main.add(t, forMode: .common)
         hoverTimer = t
     }
@@ -199,7 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // an extra evaluation the instant an overlay actually starts, so this poll is
         // mostly a recovery path for the overlay *closing*.
         let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
-            self?.evaluateSystemOverlay()
+            MainActor.assumeIsolated { self?.evaluateSystemOverlay() }
         }
         RunLoop.main.add(t, forMode: .common)
         overlayTimer = t
@@ -226,7 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleSpaceChange()
+            MainActor.assumeIsolated { self?.handleSpaceChange() }
         }
     }
 
@@ -251,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self, weak panel] _ in
             guard let panel else { return }
             notchLog("[notch.pn] occlusion visible=\(panel.occlusionState.contains(.visible)) raw=\(panel.occlusionState.rawValue)")
-            self?.evaluateSystemOverlay()
+            MainActor.assumeIsolated { self?.evaluateSystemOverlay() }
         }
     }
 

@@ -37,12 +37,6 @@ enum Permissions {
 
     static var accessibilityTrusted: Bool { AXIsProcessTrusted() }
 
-    /// Shows the system "grant Accessibility access" prompt (only the first time).
-    static func requestAccessibility() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
-    }
-
     // MARK: Automation (Apple Events → Spotify)
 
     /// TCC's Apple-Events query API (AEDeterminePermissionToAppleEvents) is gone
@@ -98,10 +92,7 @@ enum Permissions {
 
     // MARK: System Settings deep links
 
-    static func openAccessibilitySettings()  { open("Privacy_Accessibility") }
-    static func openAutomationSettings()     { open("Privacy_Automation") }
-    static func openFilesAndFoldersSettings() { open("Privacy_FilesAndFolders") }
-
+    /// `anchor` is a `PermissionPrompt.rawValue` (e.g. `Privacy_Accessibility`).
     static func open(_ anchor: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
             NSWorkspace.shared.open(url)

@@ -182,17 +182,21 @@ Sessions that are already running pick the hooks up without a restart. Terminal.
 
 ```
 Sources/Notch/
-├── main.swift, AppDelegate.swift      AppKit entry point; hover/overlay watchers
-├── AppEnvironment.swift               Observable app state, service lifecycle & gating, session toasts
+├── App/
+│   ├── main.swift, AppDelegate.swift  AppKit entry point; hover/overlay watchers
+│   └── AppEnvironment.swift           Observable app state, service lifecycle & gating, session toasts
 ├── Window/
 │   ├── NotchPanel.swift               Borderless panel, NotchShape, swipe detection
 │   └── SettingsWindowController.swift
 ├── Views/
 │   ├── NotchRootView.swift            The blob: collapsed peek ↔ expanded morph, toasts
-│   ├── Tabs.swift                     Music & Screenshots tabs, scrubber, marquee, saved-in panel
-│   ├── ClaudeSessionsUI.swift         Claude spinner, sessions panel, Clawd toast
+│   ├── DancingBars.swift              Six audio-reactive bars
 │   ├── OnboardingView.swift           First-run permissions walkthrough
-│   └── SettingsView.swift
+│   ├── SettingsView.swift
+│   ├── Music/                         Music tab: transport, scrubber, marquee, save button, saved-in panel
+│   ├── Screenshots/                   Screenshots tab: thumbnail strip, copied toast, thumbnail loader
+│   ├── Claude/                        Claude spinner + corner, sessions panel, Clawd sprite & toast
+│   └── Shared/                        EmptyTab, Haptics
 ├── PermissionPrompt/                  Guided System Settings overlay (drag-row / toggle variants)
 └── Services/
     ├── AudioMeter.swift               CoreAudio process tap → 6-band levels
