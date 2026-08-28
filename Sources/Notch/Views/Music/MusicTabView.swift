@@ -7,6 +7,7 @@ struct MusicTabView: View {
     @EnvironmentObject private var music: NowPlayingManager
     @EnvironmentObject private var spotify: SpotifyLibrary
     @EnvironmentObject private var notch: NotchState
+    @EnvironmentObject private var settings: SettingsStore
     private var info: NowPlayingInfo { music.info }
 
     private static let trackFade: Animation = .easeInOut(duration: 0.34)
@@ -41,17 +42,24 @@ struct MusicTabView: View {
             // Middle: elapsed · progress · remaining (draggable scrubber)
             MusicProgressLine(info: info) { music.seek(to: $0) }
 
-            // Bottom: ⏮ ⏯ ⏭ centred, save button at the left edge
+            // Bottom: transport centred, save button at the left edge. For podcasts
+            // the side buttons scrub by seconds instead of jumping episodes.
             ZStack {
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    TransportButton(symbol: "backward.fill", size: 13, enabled: info.hasContent) { music.previous() }
+                    TransportButton(symbol: info.isPodcast ? "gobackward.\(skipSeconds)" : "backward.fill",
+                                    size: 13, enabled: info.hasContent) {
+                        if info.isPodcast { music.skip(by: -Double(skipSeconds)) } else { music.previous() }
+                    }
                     Spacer().frame(width: 26)
                     PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
                         music.togglePlayPause()
                     }
                     Spacer().frame(width: 26)
-                    TransportButton(symbol: "forward.fill", size: 13, enabled: info.hasContent) { music.next() }
+                    TransportButton(symbol: info.isPodcast ? "goforward.\(skipSeconds)" : "forward.fill",
+                                    size: 13, enabled: info.hasContent) {
+                        if info.isPodcast { music.skip(by: Double(skipSeconds)) } else { music.next() }
+                    }
                     Spacer(minLength: 0)
                 }
                 HStack {
@@ -83,6 +91,8 @@ struct MusicTabView: View {
         .animation(Self.trackFade, value: info.artist)
         .animation(Self.trackFade, value: music.displayAccent)
     }
+
+    private var skipSeconds: Int { settings.podcastSkipSeconds }
 
     /// Heart / saved-in make sense once we can name the track on Spotify — or
     /// always, pre-connect, so the buttons can lead into the connect flow.

@@ -45,6 +45,7 @@ Music · audio-reactive bars · screenshots · your Spotify library · **live Cl
 
 - **Now Playing, from anywhere**: reads the system's Now Playing data (the same source Control Center uses), with a Spotify Apple-Events fallback for macOS versions that lock MediaRemote down. Play/pause, skip, and seek from the notch.
 - **Real audio visualization**: a CoreAudio process tap feeds six log-spaced bandpass filters (80 Hz to 7 kHz); each bar is a real frequency band with its own attack/release envelope. Not a canned animation.
+- **Podcasts skip by seconds, not episodes**: when what's playing is a podcast episode, the two side transport buttons become 15-second scrub buttons instead of previous/next — jumping episodes is almost never what you want mid-listen. 15 s matches Spotify's own player; switch it to 30 s in Settings.
 - **Long titles scroll**: a podcast title that doesn't fit the player holds still, then glides through Spotify-style and loops — no `…` truncation.
 
 ### Screenshots

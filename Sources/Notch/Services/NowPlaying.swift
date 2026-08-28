@@ -16,7 +16,16 @@ struct NowPlayingInfo: Equatable {
     var duration: Double?       // total seconds
     var elapsed: Double?        // seconds at `elapsedAt`
     var elapsedAt: Date?        // wall-clock time when `elapsed` was sampled
+    var isPodcast = false       // spoken-word item: transport skips by seconds, not tracks
     var hasContent: Bool { !title.isEmpty }
+
+    /// Where the playhead is *right now*: the last sampled position, extrapolated by
+    /// the wall-clock time since it was taken (we only refresh every few seconds).
+    var liveElapsed: Double {
+        guard let e = elapsed else { return 0 }
+        guard isPlaying, let at = elapsedAt else { return e }
+        return e + Date().timeIntervalSince(at)
+    }
 }
 
 /// Reads & controls whatever is playing. Prefers the system "Now Playing" data
@@ -45,8 +54,10 @@ final class NowPlayingManager: ObservableObject {
     private var artworkCache: [String: NSImage] = [:]
     private var accentCache: [String: Color] = [:]
     /// artist+title → Spotify track id, so the AppleScript id lookup on the
-    /// MediaRemote path runs once per track instead of on every refresh.
-    private var spotifyIDCache: [String: String] = [:]
+    /// MediaRemote path runs once per item instead of on every refresh. We cache the
+    /// full URI rather than the bare track id because episodes have no track id --
+    /// under an id-only cache a podcast re-probed Spotify on every single refresh.
+    private var spotifyURICache: [String: String] = [:]
 
     func start() {
         mr.registerForNotifications { [weak self] in self?.refresh() }
@@ -82,6 +93,15 @@ final class NowPlayingManager: ObservableObject {
     func next()     { command(.nextTrack, spotify: "next track") }
     func previous() { command(.previousTrack, spotify: "previous track") }
 
+    /// Jump within the current item -- forward for a positive `seconds`, back for a
+    /// negative one. This is what the transport buttons do for podcasts, where
+    /// next/previous *episode* is almost never what you want mid-listen.
+    func skip(by seconds: Double) {
+        var target = info.liveElapsed + seconds
+        if let d = info.duration, d > 0 { target = min(target, d) }
+        seek(to: target)   // `seek` clamps the low end at 0
+    }
+
     /// Seek the current track to `seconds`. Tries MediaRemote first; falls back to
     /// Spotify Apple Events if the system path isn't available.
     func seek(to seconds: Double) {
@@ -109,7 +129,7 @@ final class NowPlayingManager: ObservableObject {
             if var mrInfo, mrInfo.hasContent {
                 self.usingSpotifyFallback = false
                 self.attachArtwork(&mrInfo)
-                self.attachSpotifyTrackID(&mrInfo)
+                self.attachSpotifyMetadata(&mrInfo)
                 self.info = mrInfo
             } else if let (spot, artURL) = SpotifyBridge.fetch() {
                 self.usingSpotifyFallback = true
@@ -158,18 +178,25 @@ final class NowPlayingManager: ObservableObject {
     /// playing we can ask it directly — one synchronous Apple Events round-trip
     /// per new track (same cost profile as the fallback path's fetch). The title
     /// must match so we don't mislabel some other app's audio.
-    private func attachSpotifyTrackID(_ info: inout NowPlayingInfo) {
+    private func attachSpotifyMetadata(_ info: inout NowPlayingInfo) {
         let key = "\(info.artist)\u{1}\(info.title)"
-        if let cached = spotifyIDCache[key] {
-            info.spotifyTrackID = cached
+        if let cached = spotifyURICache[key] {
+            apply(spotifyURI: cached, to: &info)
             return
         }
         guard SpotifyBridge.isRunning,
               let (id, name) = SpotifyBridge.currentTrackIDAndName(),
-              name == info.title,
-              let bare = SpotifyBridge.bareTrackID(id) else { return }
-        spotifyIDCache[key] = bare
-        info.spotifyTrackID = bare
+              name == info.title else { return }
+        spotifyURICache[key] = id
+        apply(spotifyURI: id, to: &info)
+    }
+
+    /// A Spotify URI tells us both things we want: the bare track id (nil for
+    /// anything that isn't a song) and whether this is a podcast episode. Only ever
+    /// sets `isPodcast` to true, so a MediaRemote media-type hit isn't undone here.
+    private func apply(spotifyURI uri: String, to info: inout NowPlayingInfo) {
+        info.spotifyTrackID = SpotifyBridge.bareTrackID(uri)
+        if SpotifyBridge.isEpisodeURI(uri) { info.isPodcast = true }
     }
 
     private func loadArtwork(from url: URL, key: String?) {
@@ -292,6 +319,11 @@ final class MediaRemoteBridge {
             }
             info.artworkKey = (raw["kMRMediaRemoteNowPlayingInfoContentItemIdentifier"] as? String)
                 ?? "\(info.artist)\u{1}\(info.title)"
+            // Apple Podcasts & friends label spoken-word items here; Spotify doesn't
+            // populate it, which is what `attachSpotifyMetadata` covers.
+            if let mediaType = raw["kMRMediaRemoteNowPlayingInfoMediaType"] as? String {
+                info.isPodcast = mediaType.localizedCaseInsensitiveContains("podcast")
+            }
             let rate = (raw["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double) ?? 0
             info.isPlaying = rate > 0
             info.duration = raw["kMRMediaRemoteNowPlayingInfoDuration"] as? Double
@@ -345,6 +377,9 @@ enum SpotifyBridge {
         _ = run("set player position to \(seconds)")
     }
 
+    /// True for a podcast episode URI ("spotify:episode:xxxx").
+    static func isEpisodeURI(_ uri: String) -> Bool { uri.hasPrefix("spotify:episode:") }
+
     /// "spotify:track:xxxx" → "xxxx"; nil for episodes / local files / anything else.
     static func bareTrackID(_ uri: String) -> String? {
         guard uri.hasPrefix("spotify:track:") else { return nil }
@@ -389,6 +424,7 @@ enum SpotifyBridge {
         info.album = parts[2]
         info.artworkKey = parts[3].isEmpty ? "\(parts[1])\u{1}\(parts[0])" : parts[3]
         info.spotifyTrackID = bareTrackID(parts[3])
+        info.isPodcast = isEpisodeURI(parts[3])
         info.isPlaying = parts[5] == "playing"
         info.source = "Spotify"
         if parts.count >= 8 {

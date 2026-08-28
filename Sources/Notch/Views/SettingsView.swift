@@ -24,6 +24,22 @@ struct SettingsView: View {
                 Text("General")
             }
             Section {
+                Picker(selection: $settings.podcastSkipSeconds) {
+                    ForEach(SettingsStore.podcastSkipOptions, id: \.self) { secs in
+                        Text("\(secs) seconds").tag(secs)
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Podcast skip interval")
+                        Text("While a podcast is playing, the side transport buttons scrub by this much instead of jumping to the previous or next episode.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Music")
+            }
+            Section {
                 Toggle(isOn: $settings.claudeSessionsEnabled) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Show live Claude Code sessions")
