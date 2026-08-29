@@ -13,7 +13,7 @@ struct MusicProgressLine: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { _ in
             let total = info.duration ?? 0
-            let liveElapsed = currentElapsed.clamped(to: 0...max(total, 0))
+            let liveElapsed = info.liveElapsed.clamped(to: 0...max(total, 0))
             let liveFraction: CGFloat = total > 0 ? CGFloat(liveElapsed / total) : 0
             let displayFraction = dragFraction ?? liveFraction
             let displaySecs = Double(displayFraction) * total
@@ -95,12 +95,6 @@ struct MusicProgressLine: View {
             )
         }
         .frame(height: 14)
-    }
-
-    private var currentElapsed: Double {
-        guard let e = info.elapsed else { return 0 }
-        guard info.isPlaying, let at = info.elapsedAt else { return e }
-        return e + Date().timeIntervalSince(at)
     }
 
     private func clamp01(_ x: CGFloat) -> CGFloat { min(1, max(0, x)) }
