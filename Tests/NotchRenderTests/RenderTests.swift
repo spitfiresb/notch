@@ -61,21 +61,45 @@ final class RenderTests: XCTestCase {
                             accent: Color(red: 0.95, green: 0.5, blue: 0.3))
     }
 
-    private func write(_ view: some View, size: CGSize, name: String) {
+    /// Render `view` at `size`, optionally cropping the result to `crop`
+    /// (in the view's points, top-left origin).
+    private func write(_ view: some View, size: CGSize, crop: CGRect? = nil, name: String) {
         let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
         renderer.scale = 2
-        guard let cg = renderer.cgImage else { return XCTFail("no image for \(name)") }
+        guard var cg = renderer.cgImage else { return XCTFail("no image for \(name)") }
+        if let crop {
+            let px = CGRect(x: crop.minX * 2, y: crop.minY * 2, width: crop.width * 2, height: crop.height * 2)
+            guard let c = cg.cropping(to: px) else { return XCTFail("crop \(name)") }
+            cg = c
+        }
         let rep = NSBitmapImageRep(cgImage: cg)
         guard let png = rep.representation(using: .png, properties: [:]) else { return XCTFail("png \(name)") }
         try? png.write(to: outDir.appendingPathComponent("\(name).png"))
     }
 
-    /// The panel, on a desktop-grey ground so the black blob and its shadow read.
+    /// The root view lays the blob out in screen coordinates and the panel
+    /// window is only a viewport onto it, so the harness does the same: render
+    /// the whole screen and crop to the docked window's frame.
+    private var screenSize: CGSize { ScreenMetrics.screen?.frame.size ?? CGSize(width: 1728, height: 1117) }
+    private func windowCrop(for dock: NotchDock) -> CGRect {
+        guard let s = ScreenMetrics.screen else { return .zero }
+        let f = ScreenMetrics.windowFrame(for: dock)
+        return CGRect(x: f.minX - s.frame.minX, y: s.frame.maxY - f.maxY, width: f.width, height: f.height)
+    }
+
+    /// The root view on a desktop-grey ground so the black blob and its shadow read.
+    private func root(_ env: Env) -> some View {
+        env.inject(NotchRootView())
+            .background(Color(red: 0.42, green: 0.45, blue: 0.52))
+    }
     private func panel(_ env: Env, dock: NotchDock, open: Bool) -> some View {
         env.notch.dock = dock
         env.notch.isOpen = open
-        return env.inject(NotchRootView())
-            .background(Color(red: 0.42, green: 0.45, blue: 0.52))
+        return root(env)
+    }
+    /// Write the docked window's view of the root.
+    private func writeDocked(_ env: Env, dock: NotchDock, name: String) {
+        write(root(env), size: screenSize, crop: windowCrop(for: dock), name: name)
     }
 
     func testDockStates() {
@@ -83,20 +107,21 @@ final class RenderTests: XCTestCase {
             for podcast in [false, true] {
                 let env = Env()
                 seed(env, podcast: podcast)
-                let size = ScreenMetrics.windowSize(for: dock)
                 let kind = podcast ? "podcast" : "song"
                 if !podcast {
-                    write(panel(env, dock: dock, open: false), size: size, name: "\(dock)-collapsed")
+                    env.notch.dock = dock; env.notch.isOpen = false
+                    writeDocked(env, dock: dock, name: "\(dock)-collapsed")
                 }
-                write(panel(env, dock: dock, open: true), size: size, name: "\(dock)-open-\(kind)")
+                env.notch.dock = dock; env.notch.isOpen = true
+                writeDocked(env, dock: dock, name: "\(dock)-open-\(kind)")
             }
         }
-        // Screenshots tab, empty state, portrait.
+        // Screenshots tab, empty state, side dock.
         let env = Env()
         seed(env, podcast: false)
         env.notch.tab = .screenshots
-        write(panel(env, dock: .left, open: true), size: ScreenMetrics.windowSize(for: .left),
-              name: "left-open-screenshots")
+        env.notch.dock = .left; env.notch.isOpen = true
+        writeDocked(env, dock: .left, name: "left-open-screenshots")
     }
 
     func testSideToast() {
@@ -108,33 +133,29 @@ final class RenderTests: XCTestCase {
             env.notch.dock = dock
             env.notch.toast = .session(SessionToast(session: session, kind: .complete))
             env.notch.isOpen = true
-            write(env.inject(NotchRootView()).background(Color(red: 0.42, green: 0.45, blue: 0.52)),
-                  size: ScreenMetrics.windowSize(for: dock), name: "\(dock)-toast")
+            writeDocked(env, dock: dock, name: "\(dock)-toast")
         }
     }
 
-    func testDragOverlay() {
-        // A scaled-down screen: the ghost hugs the target edge, the droplet
-        // floats where the cursor is.
-        let screen = CGSize(width: 900, height: 560)
-        for (dock, cursor) in [(NotchDock.top, CGPoint(x: 520, y: 140)),
-                               (.left, CGPoint(x: 160, y: 300)),
-                               (.right, CGPoint(x: 760, y: 260))] {
-            let model = DockDragModel()
-            model.screenSize = screen
-            model.target = dock
-            model.cursor = cursor
-            model.phase = .dragging
-            write(DockDragOverlayView(model: model)
-                    .background(Color(red: 0.42, green: 0.45, blue: 0.52)),
-                  size: screen, name: "overlay-\(dock)")
+    func testDrag() {
+        // Mid-drag, the whole screen: the droplet floats where the cursor is
+        // and every edge shows its landing ghost with the nearest one lit.
+        let sz = screenSize
+        for (target, cursor) in [(NotchDock.top, CGPoint(x: sz.width * 0.55, y: 140)),
+                                 (.left, CGPoint(x: 160, y: sz.height * 0.5)),
+                                 (.right, CGPoint(x: sz.width - 200, y: sz.height * 0.45))] {
+            let env = Env()
+            seed(env, podcast: false)
+            env.notch.dock = .top
+            env.notch.isDockDragging = true
+            env.notch.dragTarget = target
+            env.notch.dragCursor = cursor
+            write(root(env), size: sz, name: "drag-\(target)")
         }
-        let model = DockDragModel()
-        model.screenSize = screen
-        model.target = .right
-        model.phase = .settling
-        write(DockDragOverlayView(model: model)
-                .background(Color(red: 0.42, green: 0.45, blue: 0.52)),
-              size: screen, name: "overlay-right-settled")
+        // Landed on the right: the same view, docked, full screen.
+        let env = Env()
+        seed(env, podcast: false)
+        env.notch.dock = .right
+        write(root(env), size: sz, name: "drag-right-landed")
     }
 }
