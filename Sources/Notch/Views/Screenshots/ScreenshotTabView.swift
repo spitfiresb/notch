@@ -65,6 +65,7 @@ private struct ScrollOffsetKey: PreferenceKey {
 private struct ScreenshotThumb: View {
     let url: URL
     let activity: ScrollActivity
+    private let size = CGSize(width: 104, height: 64)
     @State private var image: NSImage?
     @State private var date: Date?
     @State private var hovering = false
@@ -77,7 +78,7 @@ private struct ScreenshotThumb: View {
                 Color.white.opacity(0.07)
             }
         }
-        .frame(width: 104, height: 64)
+        .frame(width: size.width, height: size.height)
         .overlay(alignment: .bottom) {
             if hovering {
                 Text(relativeTime(date))

@@ -37,13 +37,17 @@ struct SessionsCorner: View {
     /// the ⏮ ⏯ ⏭ centreline.
     static let stripHeight: CGFloat = 30
     /// Distance from the top of the open blob to the top of the strip: the
-    /// transport row is the last thing in the tab, above its 10 pt bottom pad.
-    static let stripTopInset: CGFloat = ScreenMetrics.expandedSize.height - 10 - stripHeight
+    /// transport row is the last thing in the tab, above its bottom pad.
+    static func stripTopInset(for dock: NotchDock) -> CGFloat {
+        ScreenMetrics.expandedSize(for: dock).height
+            - ScreenMetrics.contentVerticalInset(for: dock) - stripHeight
+    }
     /// Where the spinner sits, in screen coordinates, given the open blob's
-    /// rect (bottom-right, inside the 22 pt content inset). Mirrors NotchRootView.
-    static func hitRect(inBlob blob: NSRect) -> NSRect {
-        NSRect(x: blob.maxX - 22 - 28, y: blob.maxY - stripTopInset - stripHeight,
-               width: 32, height: stripHeight)
+    /// rect: the bottom-right corner inside the 22 pt content inset, on every
+    /// dock. Mirrors NotchRootView.
+    static func hitRect(inBlob blob: NSRect, dock: NotchDock) -> NSRect {
+        return NSRect(x: blob.maxX - 22 - 28, y: blob.maxY - stripTopInset(for: dock) - stripHeight,
+                      width: 32, height: stripHeight)
     }
 
     var body: some View {

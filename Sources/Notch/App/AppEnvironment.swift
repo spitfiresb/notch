@@ -163,12 +163,13 @@ final class NotchState: ObservableObject {
     /// Blob size while open. The sessions panel is only as tall as its rows
     /// (capped at the music-panel height, the window's fixed size).
     func openBlobSize(sessionRows: Int) -> CGSize {
-        guard isOpen else { return ScreenMetrics.notchSize }
-        if tab == .music && musicPanelExpanded { return ScreenMetrics.expandedMusicSize }
-        guard sessionsPanelExpanded else { return ScreenMetrics.expandedSize }
-        let h = ScreenMetrics.expandedSize.height + SessionsPanel.height(rows: sessionRows) + 10
-        return CGSize(width: ScreenMetrics.expandedSize.width,
-                      height: min(h, ScreenMetrics.expandedMusicSize.height))
+        guard isOpen else { return ScreenMetrics.collapsedSize(for: dock) }
+        let expanded = ScreenMetrics.expandedSize(for: dock)
+        let biggest = ScreenMetrics.windowSize(for: dock)
+        if tab == .music && musicPanelExpanded { return biggest }
+        guard sessionsPanelExpanded else { return expanded }
+        let h = expanded.height + SessionsPanel.height(rows: sessionRows) + 10
+        return CGSize(width: expanded.width, height: min(h, biggest.height))
     }
     @Published var toast: NotchToast?
     /// Music tab's taller state — the "Saved in" playlist panel unfolded
@@ -176,6 +177,24 @@ final class NotchState: ObservableObject {
     @Published var musicPanelExpanded = false {
         didSet { if musicPanelExpanded { sessionsPanelExpanded = false } }
     }
+
+    /// Which screen edge the notch is docked to. Set by dragging the blob
+    /// (NotchDragController), persisted across launches.
+    @Published var dock: NotchDock = NotchDock.stored {
+        didSet { dock.store() }
+    }
+    /// True from the moment a drag tears the blob off its edge until the
+    /// button is released: the blob is a droplet riding `dragCursor`, the
+    /// landing ghosts are showing, and the hover watcher stands down.
+    @Published var isDockDragging = false
+    /// True from release until the blob has settled on its new edge and the
+    /// window has shrunk back to its docked viewport.
+    @Published var isDockLanding = false
+    /// Cursor position while dragging, in screen-space layout coordinates
+    /// (top-left origin, y down) — where the droplet rides.
+    @Published var dragCursor: CGPoint = .zero
+    /// The edge the blob would land on if released now.
+    @Published var dragTarget: NotchDock = .top
 
     /// `true` while Mission Control / App Exposé / Launchpad / Show Desktop is on
     /// screen. The panel is fully hidden then so it doesn't cover the system overlay.

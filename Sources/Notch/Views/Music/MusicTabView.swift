@@ -13,8 +13,39 @@ struct MusicTabView: View {
 
     private static let trackFade: Animation = .easeInOut(duration: 0.34)
 
-    var body: some View {
+    var body: some View { landscape }
+
+    private var landscape: some View {
         VStack(spacing: 5) {
+            landscapeHeader
+
+            // Middle: elapsed · progress · remaining (draggable scrubber)
+            MusicProgressLine(info: info) { music.seek(to: $0) }
+
+            transportRow
+
+            // The notch grows downward (NotchRootView sizes the blob off
+            // `musicPanelExpanded`) and the playlist panel fills the new space —
+            // the controls above never move.
+            if notch.musicPanelExpanded {
+                SavedInPanel(accent: music.displayAccent) {
+                    notch.musicPanelExpanded = false
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, 4)
+                .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // One fade applies to every track-driven change: art swap, title/artist
+        // text cross-fade, and the dancing-bars accent colour interpolation.
+        .animation(Self.trackFade, value: music.displayKey)
+        .animation(Self.trackFade, value: info.title)
+        .animation(Self.trackFade, value: info.artist)
+        .animation(Self.trackFade, value: music.displayAccent)
+    }
+
+    private var landscapeHeader: some View {
             // Top: art · title/artist · dancing bars
             HStack(spacing: 9) {
                 artwork
@@ -39,13 +70,12 @@ struct MusicTabView: View {
                         .matchedGeometryEffect(id: "chromeBars", in: namespace)
                 }
             }
+    }
 
-            // Middle: elapsed · progress · remaining (draggable scrubber)
-            MusicProgressLine(info: info) { music.seek(to: $0) }
-
-            // Bottom: transport centred, save button at the left edge. Podcasts get
-            // Spotify's own episode layout instead -- speed, ±15 s, prev/next episode
-            // -- and no save button (Spotify greys it out for episodes too).
+    /// Bottom: transport centred, save button at the left edge. Podcasts get
+    /// Spotify's own episode layout instead -- speed, ±15 s, prev/next episode
+    /// -- and no save button (Spotify greys it out for episodes too).
+    private var transportRow: some View {
             ZStack {
                 if info.isPodcast {
                     HStack(spacing: 14) {
@@ -87,26 +117,6 @@ struct MusicTabView: View {
                 }
             }
             .frame(height: 30)
-
-            // The notch grows downward (NotchRootView sizes the blob off
-            // `musicPanelExpanded`) and the playlist panel fills the new space —
-            // the controls above never move.
-            if notch.musicPanelExpanded {
-                SavedInPanel(accent: music.displayAccent) {
-                    notch.musicPanelExpanded = false
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .padding(.top, 4)
-                .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // One fade applies to every track-driven change: art swap, title/artist
-        // text cross-fade, and the dancing-bars accent colour interpolation.
-        .animation(Self.trackFade, value: music.displayKey)
-        .animation(Self.trackFade, value: info.title)
-        .animation(Self.trackFade, value: info.artist)
-        .animation(Self.trackFade, value: music.displayAccent)
     }
 
     private var skipSeconds: Int { settings.podcastSkipSeconds }
