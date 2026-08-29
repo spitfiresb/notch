@@ -37,17 +37,16 @@ struct SessionsCorner: View {
     /// the ⏮ ⏯ ⏭ centreline.
     static let stripHeight: CGFloat = 30
     /// Distance from the top of the open blob to the top of the strip: the
-    /// transport row is the last thing in the tab, above its 10 pt bottom pad.
+    /// transport row is the last thing in the tab, above its bottom pad.
     static func stripTopInset(for dock: NotchDock) -> CGFloat {
-        ScreenMetrics.expandedSize(for: dock).height - 10 - stripHeight
+        ScreenMetrics.expandedSize(for: dock).height
+            - ScreenMetrics.contentVerticalInset(for: dock) - stripHeight
     }
     /// Where the spinner sits, in screen coordinates, given the open blob's
-    /// rect: the bottom corner on the blob's free side (right, except when the
-    /// notch is docked to the right edge), inside the 22 pt content inset.
-    /// Mirrors NotchRootView.
+    /// rect: the bottom-right corner inside the 22 pt content inset, on every
+    /// dock. Mirrors NotchRootView.
     static func hitRect(inBlob blob: NSRect, dock: NotchDock) -> NSRect {
-        let x = dock == .right ? blob.minX + 22 - 4 : blob.maxX - 22 - 28
-        return NSRect(x: x, y: blob.maxY - stripTopInset(for: dock) - stripHeight,
+        return NSRect(x: blob.maxX - 22 - 28, y: blob.maxY - stripTopInset(for: dock) - stripHeight,
                       width: 32, height: stripHeight)
     }
 
@@ -61,7 +60,7 @@ struct SessionsCorner: View {
         .frame(width: 24, height: Self.stripHeight)
         .contentShape(Rectangle())
         .onHover { inside in
-            if inside, claude.anyActive, !notch.sessionsPanelExpanded, notch.dock == .top {
+            if inside, claude.anyActive, !notch.sessionsPanelExpanded {
                 notch.sessionsPanelExpanded = true
             }
         }

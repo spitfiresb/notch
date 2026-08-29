@@ -44,44 +44,44 @@ enum ScreenMetrics {
 
     /// Compact size used for the transient "screenshot copied" banner.
     static let toastSize = CGSize(width: 252, height: 46)
-    /// On a side dock the banner is turned a quarter turn so it reads down the
-    /// edge — same banner, sides swapped.
-    static func toastSize(for dock: NotchDock) -> CGSize {
-        dock == .top ? toastSize : CGSize(width: toastSize.height, height: toastSize.width)
-    }
 
     // MARK: Side docks
     //
-    // Docked to a vertical edge the notch stands upright: a slim pill when
-    // collapsed, and when open a portrait card that grows out from the edge.
-    // Everything below is the side-dock counterpart of the top-dock sizes above.
+    // Docked to a vertical edge only the collapsed pill differs: it stands
+    // upright along the edge. Open, it's the same landscape card as the top
+    // dock — same size, same layout — grown out sideways from the edge instead
+    // of down from the top.
 
     /// Collapsed pill on a vertical edge: the top pill's contents (14 pt art,
     /// the small meter, the Claude spinner) at the top pill's sizes, with the
     /// run of black between them cut to about half. 36 pt thick gives the
     /// 14 pt art the same breathing room the 37 pt top pill gives it.
     static let sidePillSize = CGSize(width: 36, height: 150)
-    /// Open strip on a vertical edge: barely wider than the pill, with the
-    /// music tab stacked down it (art · spine-rotated title · bars · transport)
-    /// and the Claude spinner at the foot. The playlist and sessions panels
-    /// don't fit a strip and stay top-dock-only.
-    static let sideExpandedSize = CGSize(width: 72, height: 400)
-    /// Side-dock counterpart of `expandedMusicSize` — the window's fixed size.
-    static let sideExpandedMusicSize = CGSize(width: 72, height: 400)
 
     static func collapsedSize(for dock: NotchDock) -> CGSize {
         dock == .top ? notchSize : sidePillSize
     }
+    /// Black above and below the tab content. At the top the card's upper edge
+    /// merges into the bezel so a tight 10 pt reads fine; on a side dock both
+    /// edges are visible rounded corners and the art wants more room.
+    static func contentVerticalInset(for dock: NotchDock) -> CGFloat { dock == .top ? 10 : 18 }
+    private static func sideExtra(for dock: NotchDock) -> CGFloat {
+        2 * (contentVerticalInset(for: dock) - contentVerticalInset(for: .top))
+    }
+    /// Same card as the top dock, taller by the extra vertical inset on the sides.
     static func expandedSize(for dock: NotchDock) -> CGSize {
-        dock == .top ? expandedSize : sideExpandedSize
+        CGSize(width: expandedSize.width, height: expandedSize.height + sideExtra(for: dock))
     }
     /// The fixed window size for a dock — the largest blob it can show.
     static func windowSize(for dock: NotchDock) -> CGSize {
-        dock == .top ? expandedMusicSize : sideExpandedMusicSize
+        CGSize(width: expandedMusicSize.width, height: expandedMusicSize.height + sideExtra(for: dock))
     }
 
-    /// Frame of the fixed-size window for a dock: flush against the docked edge,
-    /// centred along it.
+    /// Frame of the fixed-size window for a dock: flush against the docked edge.
+    /// The blob is anchored to the window's top on every dock, so opening only
+    /// ever grows downward and the content above never shifts. On the sides the
+    /// window's top sits at the collapsed pill's top, which leaves the pill
+    /// centred on the edge.
     static func windowFrame(for dock: NotchDock) -> NSRect {
         guard let s = screen else { return .zero }
         let sf = s.frame
@@ -91,12 +91,10 @@ enum ScreenMetrics {
             return NSRect(x: (sf.minX + sf.maxX) / 2 - size.width / 2,
                           y: sf.maxY - size.height,
                           width: size.width, height: size.height)
-        case .left:
-            return NSRect(x: sf.minX, y: sf.midY - size.height / 2,
-                          width: size.width, height: size.height)
-        case .right:
-            return NSRect(x: sf.maxX - size.width, y: sf.midY - size.height / 2,
-                          width: size.width, height: size.height)
+        case .left, .right:
+            let top = sf.midY + sidePillSize.height / 2
+            let x = dock == .left ? sf.minX : sf.maxX - size.width
+            return NSRect(x: x, y: top - size.height, width: size.width, height: size.height)
         }
     }
 }
@@ -177,9 +175,9 @@ final class NotchPanel: NSPanel {
         let host = SwipeHostingView(rootView: AnyView(rootView))
         host.autoresizingMask = [.width, .height]
         // The window's size is ours (`reposition`), never the content's: with the
-        // default sizing options a blob laid out wider than the window (the 252 pt
-        // banner in the 72 pt side strip) grew the window past the screen edge, and
-        // windows never shrink back — the notch was left drawn off-screen for good.
+        // default sizing options a blob laid out wider than the window grew the
+        // window past the screen edge, and windows never shrink back — the notch
+        // was left drawn off-screen for good.
         host.sizingOptions = []
         self.hosting = host
 

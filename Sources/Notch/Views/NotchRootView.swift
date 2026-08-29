@@ -20,7 +20,7 @@ struct NotchRootView: View {
     private var transitionAnim: Animation { notch.isOpen ? Self.openAnim : Self.closeAnim }
 
     private var blobSize: CGSize {
-        if notch.toast != nil { return ScreenMetrics.toastSize(for: dock) }
+        if notch.toast != nil { return ScreenMetrics.toastSize }
         return notch.openBlobSize(sessionRows: claude.sessions.count)
     }
     private var bottomRadius: CGFloat {
@@ -33,8 +33,13 @@ struct NotchRootView: View {
     private var dockEdge: Edge {
         switch dock { case .top: .top; case .left: .leading; case .right: .trailing }
     }
+    /// The blob hangs from the window's top on every dock (the side windows
+    /// are placed so the collapsed pill still sits centred on the edge). Growing
+    /// from a fixed top edge means the sessions/playlist fold-outs extend
+    /// downward and nothing above them moves — centring the blob made the whole
+    /// card slide up as the panel opened, which jittered the scrubber.
     private var dockAlignment: Alignment {
-        switch dock { case .top: .top; case .left: .leading; case .right: .trailing }
+        switch dock { case .top: .top; case .left: .topLeading; case .right: .topTrailing }
     }
     private var dockAnchor: UnitPoint {
         switch dock { case .top: .top; case .left: .leading; case .right: .trailing }
@@ -127,13 +132,13 @@ struct NotchRootView: View {
                 .fill(Color.black.opacity(0.36))
                 .frame(width: 10, height: max(0, blobSize.height - 40))
                 .blur(radius: 10)
-                .offset(x: blobSize.width - 4)
+                .offset(x: blobSize.width - 4, y: 20)
         case .right:
             Capsule(style: .continuous)
                 .fill(Color.black.opacity(0.36))
                 .frame(width: 10, height: max(0, blobSize.height - 40))
                 .blur(radius: 10)
-                .offset(x: -(blobSize.width - 4))
+                .offset(x: -(blobSize.width - 4), y: 20)
         }
     }
 
@@ -166,10 +171,9 @@ struct NotchRootView: View {
                             tabContent
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .frame(height: notch.sessionsPanelExpanded
-                                       ? ScreenMetrics.expandedSize(for: dock).height - 20 : nil)
+                                       ? ScreenMetrics.expandedSize(for: dock).height - 2 * verticalInset : nil)
                                 .padding(.horizontal, contentInset)
-                                .padding(.top, dock == .top ? 10 : 24)   // strip: clear the gear
-                                .padding(.bottom, 10)
+                                .padding(.vertical, verticalInset)
                             if notch.sessionsPanelExpanded {
                                 SessionsPanel()
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -188,10 +192,6 @@ struct NotchRootView: View {
             .animation(transitionAnim, value: notch.isOpen)
 
             if let toast = notch.toast {
-                // Banners are choreographed left-to-right (Clawd runs the width).
-                // On a side dock the whole banner is laid out flat at its normal
-                // size and turned a quarter turn, so it plays top-to-bottom.
-                let flat = ScreenMetrics.toastSize
                 Group {
                     switch toast {
                     case .screenshot(let t): ScreenshotToastView(toast: t)
@@ -200,8 +200,6 @@ struct NotchRootView: View {
                 }
                 .padding(.horizontal, 14)
                 .foregroundStyle(.white)
-                .frame(width: flat.width, height: flat.height)
-                .rotationEffect(.degrees(dock == .top ? 0 : 90))
                 .frame(width: blobSize.width, height: blobSize.height)
                 .transition(.opacity)
             }
@@ -209,12 +207,11 @@ struct NotchRootView: View {
             // Claude spinner in the bottom-right corner of the tab area while a
             // session is working; hovering it unfolds the sessions panel.
             // Placed with `offset`, not padding: padding takes part in layout,
-            // and an inset taller than the collapsed side pill (216 pt into a
-            // 180 pt pill) would inflate the stack and shove the peek out of
-            // the clip. Offsets leave layout alone.
+            // and an inset taller than the collapsed pill would inflate the
+            // stack and shove the peek out of the clip. Offsets leave layout alone.
             SessionsCorner()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: freeCornerAlignment)
-                .offset(x: dock == .right ? 22 : -22, y: SessionsCorner.stripTopInset(for: dock))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .offset(x: -22, y: SessionsCorner.stripTopInset(for: dock))
                 .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
                 .allowsHitTesting(notch.isOpen && notch.toast == nil)
                 .animation(.easeOut(duration: 0.22), value: notch.isOpen)
@@ -222,8 +219,10 @@ struct NotchRootView: View {
             // Tiny settings gear, top-right of the expanded panel. Sits just past
             // where the music tab's dancing bars end; grows on hover.
             SettingsGearButton { AppDelegate.shared?.showSettingsWindow() }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: freeCornerAlignment)
-                .offset(x: dock == .right ? 12 : -12, y: 4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                // Drops with the content's vertical inset, so it sits the same
+                // distance above the tab on the taller side-dock card.
+                .offset(x: -12, y: 4 + verticalInset - ScreenMetrics.contentVerticalInset(for: .top))
                 .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
                 .allowsHitTesting(notch.isOpen && notch.toast == nil)
                 .animation(.easeOut(duration: 0.22), value: notch.isOpen)
@@ -233,19 +232,15 @@ struct NotchRootView: View {
 
     @ViewBuilder private var tabContent: some View {
         switch notch.tab {
-        case .music:       MusicTabView(namespace: chromeNS, vertical: dock != .top)
-        case .screenshots: ScreenshotTabView(vertical: dock != .top)
+        case .music:       MusicTabView(namespace: chromeNS)
+        case .screenshots: ScreenshotTabView()
         }
     }
 
-    /// Side inset of the tab content. The portrait card is narrower, and gives
-    /// the room back to the content so the six-button podcast row still fits.
-    private var contentInset: CGFloat { dock == .top ? 22 : 8 }
+    /// Side inset of the tab content.
+    private var contentInset: CGFloat { 22 }
+    private var verticalInset: CGFloat { ScreenMetrics.contentVerticalInset(for: dock) }
 
-    /// Corner controls (gear, Claude spinner) sit on the blob's free side — the
-    /// right, except when the notch is docked to the right edge and the right
-    /// side is the one pressed against the screen.
-    private var freeCornerAlignment: Alignment { dock == .right ? .topLeading : .topTrailing }
 }
 
 /// Tiny gear in the corner of the expanded notch. Default state is barely there

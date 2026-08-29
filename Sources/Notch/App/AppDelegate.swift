@@ -164,11 +164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               width: blobSize.width, height: blobSize.height)
         case .left:
             blobRect = NSRect(x: wf.minX,
-                              y: wf.midY - blobSize.height / 2,
+                              y: wf.maxY - blobSize.height,
                               width: blobSize.width, height: blobSize.height)
         case .right:
             blobRect = NSRect(x: wf.maxX - blobSize.width,
-                              y: wf.midY - blobSize.height / 2,
+                              y: wf.maxY - blobSize.height,
                               width: blobSize.width, height: blobSize.height)
         }
 
@@ -199,7 +199,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // spinner strip that opened the panel) — fold the panel away.
                 notch.sessionsPanelExpanded = false
             } else if !notch.sessionsPanelExpanded, notch.toast == nil, env.claude.anyActive,
-                      notch.dock == .top,
                       SessionsCorner.hitRect(inBlob: blobRect, dock: notch.dock).contains(mouse) {
                 // Hovering the Claude spinner in the bottom-right corner
                 // unfolds the sessions panel. Done here (geometry) rather than

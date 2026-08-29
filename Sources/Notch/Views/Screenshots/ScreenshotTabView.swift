@@ -6,9 +6,6 @@ final class ScrollActivity { var isScrolling = false }
 
 struct ScreenshotTabView: View {
     @EnvironmentObject private var screenshots: ScreenshotWatcher
-    /// Side-docked: the open notch is a slim strip, so the thumbnails go one
-    /// under another, scaled to fit, and scroll down instead of sideways.
-    var vertical: Bool = false
 
     private static let thumbWidth: CGFloat = 104
     private static let spacing: CGFloat = 8
@@ -21,16 +18,7 @@ struct ScreenshotTabView: View {
 
     var body: some View {
         if screenshots.shots.isEmpty {
-            EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here", compact: vertical)
-        } else if vertical {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: Self.spacing) {
-                    ForEach(screenshots.shots, id: \.self) { url in
-                        ScreenshotThumb(url: url, activity: activity, size: CGSize(width: 56, height: 35))
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here")
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Self.spacing) {
@@ -77,7 +65,7 @@ private struct ScrollOffsetKey: PreferenceKey {
 private struct ScreenshotThumb: View {
     let url: URL
     let activity: ScrollActivity
-    var size = CGSize(width: 104, height: 64)
+    private let size = CGSize(width: 104, height: 64)
     @State private var image: NSImage?
     @State private var date: Date?
     @State private var hovering = false

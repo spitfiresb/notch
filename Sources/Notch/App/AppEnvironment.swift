@@ -165,8 +165,6 @@ final class NotchState: ObservableObject {
     func openBlobSize(sessionRows: Int) -> CGSize {
         guard isOpen else { return ScreenMetrics.collapsedSize(for: dock) }
         let expanded = ScreenMetrics.expandedSize(for: dock)
-        // The side strip has no room for the playlist / sessions fold-outs.
-        guard dock == .top else { return expanded }
         let biggest = ScreenMetrics.windowSize(for: dock)
         if tab == .music && musicPanelExpanded { return biggest }
         guard sessionsPanelExpanded else { return expanded }
