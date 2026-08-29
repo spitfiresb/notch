@@ -362,7 +362,7 @@ private struct CollapsedPeek: View {
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
             LengthwiseBars(color: music.displayAccent, isPlaying: music.info.isPlaying,
-                           reach: 14, barWidth: 1.8, spacing: 1.3)
+                           reach: 14, barWidth: 1.8, spacing: 1.3, fromRight: notch.dock == .right)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
                 .opacity(showing ? 1 : 0)
             // Like the top pill, the spinner slides in past the bars at the far

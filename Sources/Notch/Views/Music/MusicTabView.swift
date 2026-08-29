@@ -31,7 +31,7 @@ struct MusicTabView: View {
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
             spine
             LengthwiseBars(color: music.displayAccent, isPlaying: info.isPlaying,
-                           reach: 40, barWidth: 3, spacing: 3)
+                           reach: 40, barWidth: 3, spacing: 3, fromRight: notch.dock == .right)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
                 .opacity(info.hasContent ? 1 : 0)
             transportStack

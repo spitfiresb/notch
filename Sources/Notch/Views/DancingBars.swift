@@ -81,13 +81,17 @@ struct LengthwiseBars: View {
     var reach: CGFloat = 20
     var barWidth: CGFloat = 3
     var spacing: CGFloat = 3
+    /// Bars grow from their baseline; a quarter turn clockwise puts that on
+    /// the left. On the right edge turn the other way so they still grow out
+    /// from the screen edge.
+    var fromRight = false
 
     private var thickness: CGFloat { CGFloat(AudioMeter.bandCount) * barWidth + CGFloat(AudioMeter.bandCount - 1) * spacing }
 
     var body: some View {
         DancingBars(color: color, isPlaying: isPlaying, barWidth: barWidth, spacing: spacing)
             .frame(width: thickness, height: reach)
-            .rotationEffect(.degrees(90))
+            .rotationEffect(.degrees(fromRight ? -90 : 90))
             .frame(width: reach, height: thickness)
     }
 }
