@@ -350,28 +350,28 @@ private struct CollapsedPeek: View {
         .padding(.horizontal, 22)
     }
 
-    /// Upright pill, top-to-bottom: art at the head, the meter running down
-    /// the middle (bars reaching sideways, stacked along the length), and the
-    /// Claude spinner at the foot when a session is working.
+    /// Upright pill, top-to-bottom: art at the head, a meter the same size as
+    /// the top pill's turned to run along the length, and the Claude spinner
+    /// at the foot when a session is working.
     private var verticalPeek: some View {
         VStack(spacing: 0) {
             artwork
-                .frame(width: 16, height: 16)
+                .frame(width: 14, height: 14)
                 .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
-            LengthwiseBars(color: music.displayAccent,
-                           isPlaying: music.info.isPlaying, reach: 18)
+            LengthwiseBars(color: music.displayAccent, isPlaying: music.info.isPlaying,
+                           reach: 14, barWidth: 1.8, spacing: 1.3)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
                 .opacity(showing ? 1 : 0)
             Spacer(minLength: 0)
             if claude.anyActive {
-                ClaudeSpinner(state: claude.headlineState, size: 13)
+                ClaudeSpinner(state: claude.headlineState, size: 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, 10)
     }
 
     @ViewBuilder private var artwork: some View {

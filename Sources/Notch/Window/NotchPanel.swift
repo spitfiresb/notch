@@ -57,9 +57,11 @@ enum ScreenMetrics {
     // Everything below is the side-dock counterpart of the top-dock sizes above.
 
     /// Collapsed pill on a vertical edge. Deliberately not tied to the menu-bar
-    /// height: a 30 pt pill reads as a handle on the side, where the 37 pt
-    /// hardware-notch thickness would look like a bar.
-    static let sidePillSize = CGSize(width: 30, height: 180)
+    /// height: a slim 26 pt pill reads as a handle on the side, where the 37 pt
+    /// hardware-notch thickness would look like a bar, and short enough to
+    /// stay out of the way — it only needs room for the art, a small meter,
+    /// and the Claude spinner.
+    static let sidePillSize = CGSize(width: 26, height: 120)
     /// Open strip on a vertical edge: barely wider than the pill, with the
     /// music tab stacked down it (art · spine-rotated title · bars · transport)
     /// and the Claude spinner at the foot. The playlist and sessions panels
