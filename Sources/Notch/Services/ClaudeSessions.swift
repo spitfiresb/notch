@@ -148,7 +148,7 @@ final class ClaudeSessionStore: ObservableObject {
                 guard let self else { return }
                 self.readNew()
                 self.tick += 1
-                if self.tick % 3 == 0 { self.reapDead() }
+                if self.tick % 3 == 0 { self.reapDead(); self.detectInterrupts() }
             }
         }
     }
@@ -362,6 +362,52 @@ final class ClaudeSessionStore: ObservableObject {
     /// Drop sessions whose process is gone. Sessions we never managed to pin to
     /// a pid die once no claude process is running in their folder (after a
     /// short grace so a slow resolve doesn't flicker), or after an hour.
+    /// Ctrl-C mid-turn fires no hook at all, so an interrupted session would sit
+    /// "busy" (spinner up) until the next prompt. Claude Code does record the
+    /// interrupt as the last line of the transcript, so for busy sessions whose
+    /// transcript has grown since we last looked, peek at that line.
+    private var transcriptSizes: [String: UInt64] = [:]
+
+    private func detectInterrupts() {
+        var changed = false
+        for (id, s) in byID where s.isBusy {
+            guard let path = s.transcriptPath,
+                  let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let size = (attrs[.size] as? NSNumber)?.uint64Value,
+                  transcriptSizes[id] != size else { continue }
+            transcriptSizes[id] = size
+            guard Self.transcriptEndsWithInterrupt(path: path, size: size) else { continue }
+            var u = s
+            u.state = .done
+            u.activity = nil
+            u.turnEndedAt = Date()
+            u.lastReply = "Interrupted"
+            byID[id] = u
+            changed = true
+            notchLog("claude-sessions: interrupted \(u.projectName) id=\(id.prefix(8))")
+        }
+        transcriptSizes = transcriptSizes.filter { byID[$0.key] != nil }
+        // No `onAttention` here: the user interrupted it themselves, no toast needed.
+        if changed { publish() }
+    }
+
+    /// True when the transcript's final line is the `[Request interrupted by user]`
+    /// user turn Claude Code appends on Ctrl-C (or on a prompt typed mid-turn).
+    private static func transcriptEndsWithInterrupt(path: String, size: UInt64) -> Bool {
+        guard let h = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? h.close() }
+        let window: UInt64 = 64 * 1024
+        try? h.seek(toOffset: size > window ? size - window : 0)
+        guard let data = try? h.readToEnd() else { return false }
+        let text = String(decoding: data, as: UTF8.self)   // tolerant of a torn leading char
+        guard let last = text.split(separator: "\n", omittingEmptySubsequences: true).last,
+              let obj = try? JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any],
+              obj["type"] as? String == "user" else { return false }
+        if obj["interruptedMessageId"] != nil { return true }
+        let content = ((obj["message"] as? [String: Any])?["content"] as? [[String: Any]])?.first
+        return (content?["text"] as? String)?.hasPrefix("[Request interrupted") ?? false
+    }
+
     private func reapDead() {
         let now = Date()
         var changed = false
