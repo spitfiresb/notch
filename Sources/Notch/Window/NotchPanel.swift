@@ -44,25 +44,153 @@ enum ScreenMetrics {
 
     /// Compact size used for the transient "screenshot copied" banner.
     static let toastSize = CGSize(width: 252, height: 46)
+
+    // MARK: Side docks
+    //
+    // Docked to a vertical edge only the collapsed pill differs: it stands
+    // upright along the edge. Open, it's the same landscape card as the top
+    // dock — same size, same layout — grown out sideways from the edge instead
+    // of down from the top.
+
+    /// Collapsed pill on a vertical edge: the top pill's contents (14 pt art,
+    /// the small meter, the Claude spinner) at the top pill's sizes, with the
+    /// run of black between them cut to about half. 36 pt thick gives the
+    /// 14 pt art the same breathing room the 37 pt top pill gives it.
+    static let sidePillSize = CGSize(width: 36, height: 150)
+
+    static func collapsedSize(for dock: NotchDock) -> CGSize {
+        dock == .top ? notchSize : sidePillSize
+    }
+    /// Black above and below the tab content. At the top the card's upper edge
+    /// merges into the bezel so a tight 10 pt reads fine; on a side dock both
+    /// edges are visible rounded corners and the art wants more room.
+    static func contentVerticalInset(for dock: NotchDock) -> CGFloat { dock == .top ? 10 : 18 }
+    private static func sideExtra(for dock: NotchDock) -> CGFloat {
+        2 * (contentVerticalInset(for: dock) - contentVerticalInset(for: .top))
+    }
+    /// Same card as the top dock, taller by the extra vertical inset on the sides.
+    static func expandedSize(for dock: NotchDock) -> CGSize {
+        CGSize(width: expandedSize.width, height: expandedSize.height + sideExtra(for: dock))
+    }
+    /// The fixed window size for a dock — the largest blob it can show.
+    static func windowSize(for dock: NotchDock) -> CGSize {
+        CGSize(width: expandedMusicSize.width, height: expandedMusicSize.height + sideExtra(for: dock))
+    }
+
+    /// The free-floating droplet the notch becomes while it's being dragged
+    /// between edges: a small black capsule, sized so it clearly reads as the
+    /// notch picked up rather than a stray window.
+    static let dropletSize = CGSize(width: 110, height: 34)
+
+    // MARK: Screen-space layout
+    //
+    // NotchRootView lays the blob out in *screen* coordinates (origin at the
+    // screen's top-left, y down); the panel window is only a viewport onto it.
+    // That's what lets a drag be one continuous object: the same view keeps
+    // drawing the blob as it shrinks into a droplet, rides the cursor and
+    // settles onto the new edge, and swapping the viewport back to the small
+    // docked frame afterwards doesn't touch the SwiftUI layout at all.
+
+    /// Where a blob of `size` sits for `dock`, in screen-space layout
+    /// coordinates: hanging from the top centre, or from the side edge with
+    /// its top at the collapsed pill's top (which leaves the pill centred).
+    static func blobRect(for dock: NotchDock, size: CGSize) -> CGRect {
+        guard let s = screen else { return CGRect(origin: .zero, size: size) }
+        let w = s.frame.width, h = s.frame.height
+        switch dock {
+        case .top:
+            return CGRect(x: ((w - size.width) / 2).rounded(), y: 0, width: size.width, height: size.height)
+        case .left:
+            return CGRect(x: 0, y: ((h - sidePillSize.height) / 2).rounded(),
+                          width: size.width, height: size.height)
+        case .right:
+            return CGRect(x: w - size.width, y: ((h - sidePillSize.height) / 2).rounded(),
+                          width: size.width, height: size.height)
+        }
+    }
+
+    /// `blobRect` in AppKit screen coordinates (for hit-testing the cursor).
+    static func blobScreenRect(for dock: NotchDock, size: CGSize) -> NSRect {
+        guard let s = screen else { return .zero }
+        let r = blobRect(for: dock, size: size)
+        return NSRect(x: s.frame.minX + r.minX, y: s.frame.maxY - r.maxY,
+                      width: r.width, height: r.height)
+    }
+
+    /// Frame of the fixed-size docked window: flush against the docked edge,
+    /// its top at the blob's top so fold-outs only ever grow downward.
+    static func windowFrame(for dock: NotchDock) -> NSRect {
+        guard let s = screen else { return .zero }
+        let sf = s.frame
+        let size = windowSize(for: dock)
+        switch dock {
+        case .top:
+            return NSRect(x: (sf.minX + sf.maxX) / 2 - size.width / 2,
+                          y: sf.maxY - size.height,
+                          width: size.width, height: size.height)
+        case .left, .right:
+            let top = blobScreenRect(for: dock, size: sidePillSize).maxY
+            let x = dock == .left ? sf.minX : sf.maxX - size.width
+            return NSRect(x: x, y: top - size.height, width: size.width, height: size.height)
+        }
+    }
 }
 
-/// The classic macOS notch silhouette: flat against the screen top with little
-/// reverse curves at the upper corners and rounded lower corners.
+/// The classic macOS notch silhouette: flat against its screen edge with little
+/// reverse curves where it meets the edge and rounded corners on the free side.
+/// `edge` picks which screen edge the flat side presses against; the silhouette
+/// is drawn top-docked and axis-swapped into place for the vertical edges.
+///
+/// `topRadius` rounds the corners on the docked edge instead. With
+/// `cornerInset` 0 and both radii at half the height the shape is a capsule —
+/// the free-floating droplet — and every parameter animates, so the same shape
+/// morphs from notch to droplet and back. A capsule is symmetric, so `edge`
+/// can be switched underneath it without a visible change.
 struct NotchShape: Shape {
     var cornerInset: CGFloat = 8     // the small reverse curve where it meets the screen edge
+    var topRadius: CGFloat = 0
     var bottomRadius: CGFloat = 12
+    var edge: Edge = .top
 
-    var animatableData: CGFloat {
-        get { bottomRadius }
-        set { bottomRadius = newValue }
+    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
+        get { AnimatablePair(cornerInset, AnimatablePair(topRadius, bottomRadius)) }
+        set {
+            cornerInset = newValue.first
+            topRadius = newValue.second.first
+            bottomRadius = newValue.second.second
+        }
     }
 
     func path(in rect: CGRect) -> Path {
-        let r = min(bottomRadius, rect.height / 2)
-        let c = min(cornerInset, rect.width / 2)
+        switch edge {
+        case .top, .bottom:
+            return flatTopPath(in: rect)
+        case .leading:
+            // Transpose (x, y) -> (y, x): the flat top edge lands on the left
+            // edge. The silhouette is symmetric, so the mirroring a transpose
+            // implies is invisible.
+            let base = flatTopPath(in: CGRect(x: 0, y: 0, width: rect.height, height: rect.width))
+            return base.applying(CGAffineTransform(a: 0, b: 1, c: 1, d: 0,
+                                                   tx: rect.minX, ty: rect.minY))
+        case .trailing:
+            // (x, y) -> (W - y, x): the flat edge lands on the right.
+            let base = flatTopPath(in: CGRect(x: 0, y: 0, width: rect.height, height: rect.width))
+            return base.applying(CGAffineTransform(a: 0, b: 1, c: -1, d: 0,
+                                                   tx: rect.minX + rect.width, ty: rect.minY))
+        }
+    }
+
+    private func flatTopPath(in rect: CGRect) -> Path {
+        let r = max(0, min(bottomRadius, rect.height / 2))
+        let c = max(0, min(cornerInset, rect.width / 2))
+        let t = max(0, min(topRadius, rect.height / 2, rect.width / 2))
+        // The top corners are one quad curve each, whose endpoints slide with
+        // the parameters: at t = 0 it's the concave flare out to the screen
+        // edge, at c = 0 it's a convex rounded corner, and in between it
+        // interpolates smoothly.
         var p = Path()
-        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        p.addQuadCurve(to: CGPoint(x: rect.minX + c, y: rect.minY + c),
+        p.move(to: CGPoint(x: rect.minX + t, y: rect.minY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + c, y: rect.minY + c + t),
                        control: CGPoint(x: rect.minX + c, y: rect.minY))
         p.addLine(to: CGPoint(x: rect.minX + c, y: rect.maxY - r))
         p.addQuadCurve(to: CGPoint(x: rect.minX + c + r, y: rect.maxY),
@@ -70,19 +198,28 @@ struct NotchShape: Shape {
         p.addLine(to: CGPoint(x: rect.maxX - c - r, y: rect.maxY))
         p.addQuadCurve(to: CGPoint(x: rect.maxX - c, y: rect.maxY - r),
                        control: CGPoint(x: rect.maxX - c, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.maxX - c, y: rect.minY + c))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY),
+        p.addLine(to: CGPoint(x: rect.maxX - c, y: rect.minY + c + t))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX - t, y: rect.minY),
                        control: CGPoint(x: rect.maxX - c, y: rect.minY))
         p.closeSubpath()
         return p
     }
 }
 
-/// Borderless floating panel pinned to the top centre of the screen. Fixed size
-/// (`ScreenMetrics.expandedSize`); the blob inside grows/shrinks with SwiftUI.
+/// Borderless floating panel hugging one screen edge. The hosting view inside
+/// always covers the whole screen and lays the blob out in screen coordinates;
+/// the window is a viewport onto it — the small docked frame normally, the
+/// whole screen while the blob is being dragged between edges (`setViewport`).
 /// Mouse events are ignored while collapsed so the menu bar underneath stays usable.
 final class NotchPanel: NSPanel {
     private let hosting: SwipeHostingView<AnyView>
+    /// Clear container the screen-sized hosting view is offset inside. (A
+    /// window's contentView can't be offset, so it isn't the host itself.)
+    private let container = NSView()
+
+    /// Which screen edge the window hugs. AppDelegate mirrors `NotchState.dock`
+    /// into this; `reposition()` reads it so every re-show lands on the right edge.
+    var dock: NotchDock = .top
 
     /// Callback fired on a horizontal two-finger swipe over the panel. `dir` is +1
     /// for swipe-left (→ next tab) and -1 for swipe-right (→ previous tab), matching
@@ -94,8 +231,14 @@ final class NotchPanel: NSPanel {
 
     init(rootView: some View) {
         let host = SwipeHostingView(rootView: AnyView(rootView))
-        host.autoresizingMask = [.width, .height]
+        host.autoresizingMask = []
+        // The window's size is ours (`setViewport`), never the content's: with
+        // the default sizing options a blob laid out wider than the window grew
+        // the window past the screen edge, and windows never shrink back — the
+        // notch was left drawn off-screen for good.
+        host.sizingOptions = []
         self.hosting = host
+        container.addSubview(host)
 
         super.init(contentRect: NSRect(origin: .zero, size: ScreenMetrics.expandedMusicSize),
                    styleMask: [.borderless, .nonactivatingPanel],
@@ -125,7 +268,7 @@ final class NotchPanel: NSPanel {
         hidesOnDeactivate = false
         ignoresMouseEvents = true   // collapsed at launch
 
-        contentView = host
+        contentView = container
     }
 
     override var canBecomeKey: Bool { true }
@@ -137,14 +280,29 @@ final class NotchPanel: NSPanel {
         frameRect
     }
 
+    /// Move the docked viewport to its edge.
     func reposition() {
-        guard let screen = ScreenMetrics.screen else { return }
-        let sf = screen.frame
-        let size = ScreenMetrics.expandedMusicSize
-        setFrame(NSRect(x: (sf.minX + sf.maxX) / 2 - size.width / 2,
-                        y: sf.maxY - size.height,
-                        width: size.width, height: size.height),
-                 display: true)
+        let f = ScreenMetrics.windowFrame(for: dock)
+        guard f.width > 0 else { return }
+        setViewport(f)
+    }
+
+    /// Cover the whole screen — used for the duration of a drag so the blob
+    /// can travel anywhere.
+    func setFullScreenViewport() {
+        guard let s = ScreenMetrics.screen else { return }
+        setViewport(s.frame)
+    }
+
+    /// Show `frame` (screen coordinates) of the screen-sized content. The
+    /// hosting view is offset inside the window so it stays put on screen; the
+    /// SwiftUI layout never changes, only how much of it the window shows,
+    /// which is what keeps a viewport swap pixel-identical.
+    private func setViewport(_ frame: NSRect) {
+        guard let s = ScreenMetrics.screen else { return }
+        hosting.frame = NSRect(x: s.frame.minX - frame.minX, y: s.frame.minY - frame.minY,
+                               width: s.frame.width, height: s.frame.height)
+        setFrame(frame, display: true)
     }
 
     func show() {
