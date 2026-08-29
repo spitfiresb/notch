@@ -2,29 +2,33 @@ import AppKit
 import SwiftUI
 
 /// Drives drag-to-move. While the user holds the open blob and moves, the
-/// blob hides in place and `DockDragOverlay` takes over: a black droplet rides
-/// the cursor and a grey outlined pill marks the nearest edge. On release the
-/// droplet springs onto that outline, then the real panel is moved to the new
-/// dock and shown, and the choice is persisted.
+/// panel's window widens to cover the screen and the blob itself — the same
+/// SwiftUI view, laid out in screen coordinates — shrinks into a black droplet
+/// that rides the cursor while grey outlined pills mark every edge it can land
+/// on. On release the droplet morphs straight into the pill on the nearest
+/// edge; once it has settled the window shrinks back to that edge's docked
+/// viewport (a pixel-identical swap) and the choice is persisted. One object
+/// the whole way — nothing is hidden, swapped or faded.
 ///
 /// The controller never reads gesture coordinates. SwiftUI's drag gesture only
 /// marks the start of the press; from then on the cursor comes from
 /// `NSEvent.mouseLocation` and the button state from
-/// `NSEvent.pressedMouseButtons` on a 120 Hz tick, so hiding the blob (or the
-/// panel ignoring mouse events once closed) can't strand the drag.
+/// `NSEvent.pressedMouseButtons` on a 120 Hz tick, so the panel ignoring mouse
+/// events once closed can't strand the drag.
 @MainActor
 final class NotchDragController {
     private weak var panel: NotchPanel?
     private let notch: NotchState
-    private let overlay = DockDragOverlay()
 
     private var tick: Timer?
     private var settleWork: DispatchWorkItem?
     /// The screen the drag is happening on — the one the notch lives on.
     private var screen: NSScreen?
 
-    /// How long the droplet takes to land before the panel takes over.
-    private static let settleDuration: TimeInterval = 0.42
+    /// How long after release the window keeps its full-screen viewport. The
+    /// landing spring is critically damped with a 0.34 s response, so by now
+    /// the blob is at rest inside the docked frame it's about to be cropped to.
+    private static let settleDuration: TimeInterval = 0.7
 
     init(panel: NotchPanel, notch: NotchState) {
         self.panel = panel
@@ -33,30 +37,37 @@ final class NotchDragController {
 
     /// The press has moved far enough to count as a drag: tear the blob off.
     func begin() {
-        guard !notch.isDockDragging, let screen = ScreenMetrics.screen else { return }
+        guard !notch.isDockDragging, !notch.isDockLanding, let screen = ScreenMetrics.screen else { return }
         self.screen = screen
+        settleWork?.cancel(); settleWork = nil
         notch.cancelScheduledClose()
-        notch.close()
-        notch.isDockDragging = true
         Haptics.tick()
         notchLog("[notch.dock] drag began from \(notch.dock)")
 
-        let model = overlay.model
-        model.target = notch.dock
-        model.cursor = Self.overlayPoint(NSEvent.mouseLocation, on: screen)
-        model.phase = .dragging
-        overlay.present(on: screen)
+        // Widen the viewport first: the layout underneath doesn't change, so
+        // this is invisible, and the blob is then free to leave its edge.
+        panel?.setFullScreenViewport()
+        notch.dragCursor = Self.layoutPoint(NSEvent.mouseLocation, on: screen)
+        notch.dragTarget = notch.dock
+        notch.close()
+        notch.isDockDragging = true
         startTicking()
     }
 
     /// The press ended: land on the nearest edge.
     func end() {
-        guard notch.isDockDragging, overlay.model.phase == .dragging else { return }
+        guard notch.isDockDragging else { return }
         stopTicking()
-        let dock = overlay.model.target
-        overlay.model.phase = .settling
+        let dock = notch.dragTarget
         Haptics.tick()
         notchLog("[notch.dock] released → \(dock)")
+
+        // One state change: the droplet's rect and silhouette animate straight
+        // into the new edge's pill (NotchRootView keys its landing spring on
+        // `isDockDragging`), and the pill's contents morph with it.
+        notch.dock = dock
+        notch.isDockDragging = false
+        notch.isDockLanding = true
 
         let work = DispatchWorkItem { [weak self] in self?.land(on: dock) }
         settleWork = work
@@ -65,7 +76,6 @@ final class NotchDragController {
 
     private func land(on dock: NotchDock) {
         settleWork = nil
-        notch.dock = dock
         if let panel {
             panel.dock = dock
             panel.reposition()
@@ -73,14 +83,7 @@ final class NotchDragController {
             SpaceAttacher.attachToAllSpaces(panel)
             notchLog("[notch.dock] landed on \(dock), window \(panel.frame)")
         }
-        // The panel's pill fades in on the new edge as the droplet fades out
-        // underneath it, so the handoff reads as one object.
-        notch.isDockDragging = false
-        overlay.model.phase = .idle
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            guard let self, self.overlay.model.phase == .idle else { return }
-            self.overlay.orderOut(nil)
-        }
+        notch.isDockLanding = false
     }
 
     // MARK: Tick
@@ -100,23 +103,21 @@ final class NotchDragController {
     }
 
     private func step() {
-        guard let screen, overlay.model.phase == .dragging else { stopTicking(); return }
-        // A release can slip past the SwiftUI gesture (the blob it was attached
-        // to is hidden and the panel ignores mouse events once closed) — the
-        // physical button state is the ground truth.
+        guard let screen, notch.isDockDragging else { stopTicking(); return }
+        // A release can slip past the SwiftUI gesture (the panel ignores mouse
+        // events once closed) — the physical button state is the ground truth.
         if NSEvent.pressedMouseButtons & 1 == 0 { end(); return }
         let mouse = NSEvent.mouseLocation
-        let model = overlay.model
-        model.cursor = Self.overlayPoint(mouse, on: screen)
+        notch.dragCursor = Self.layoutPoint(mouse, on: screen)
         let target = Self.nearestDock(to: mouse, on: screen)
-        if target != model.target {
-            model.target = target
+        if target != notch.dragTarget {
+            notch.dragTarget = target
             Haptics.tick()
         }
     }
 
-    /// Screen point → overlay SwiftUI coordinates (top-left origin, y down).
-    private static func overlayPoint(_ p: CGPoint, on screen: NSScreen) -> CGPoint {
+    /// AppKit screen point → screen-space layout coordinates (top-left origin, y down).
+    private static func layoutPoint(_ p: CGPoint, on screen: NSScreen) -> CGPoint {
         CGPoint(x: p.x - screen.frame.minX, y: screen.frame.maxY - p.y)
     }
 

@@ -183,10 +183,18 @@ final class NotchState: ObservableObject {
     @Published var dock: NotchDock = NotchDock.stored {
         didSet { dock.store() }
     }
-    /// True from the moment a drag tears the blob off its edge until it has
-    /// landed on its new one. The blob hides (the drag overlay draws the
-    /// droplet and landing ghost instead) and the hover watcher stands down.
+    /// True from the moment a drag tears the blob off its edge until the
+    /// button is released: the blob is a droplet riding `dragCursor`, the
+    /// landing ghosts are showing, and the hover watcher stands down.
     @Published var isDockDragging = false
+    /// True from release until the blob has settled on its new edge and the
+    /// window has shrunk back to its docked viewport.
+    @Published var isDockLanding = false
+    /// Cursor position while dragging, in screen-space layout coordinates
+    /// (top-left origin, y down) — where the droplet rides.
+    @Published var dragCursor: CGPoint = .zero
+    /// The edge the blob would land on if released now.
+    @Published var dragTarget: NotchDock = .top
 
     /// `true` while Mission Control / App Exposé / Launchpad / Show Desktop is on
     /// screen. The panel is fully hidden then so it doesn't cover the system overlay.

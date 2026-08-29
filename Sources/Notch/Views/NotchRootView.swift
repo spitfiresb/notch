@@ -19,46 +19,95 @@ struct NotchRootView: View {
     private static let closeAnim: Animation = .easeOut(duration: 0.22)
     private var transitionAnim: Animation { notch.isOpen ? Self.openAnim : Self.closeAnim }
 
+    /// Landing spring: critically damped so the blob comes to rest on its new
+    /// edge with no overshoot, and the window viewport can be swapped back to
+    /// the docked frame the moment it stops.
+    private static let landingAnim: Animation = .spring(response: 0.34, dampingFraction: 1.0)
+    /// Tear-off: the open card collapses into the droplet under the cursor.
+    private static let tearOffAnim: Animation = .spring(response: 0.30, dampingFraction: 0.9)
+    /// Cursor-following lag while dragging — what reads as weight.
+    private static let followAnim: Animation = .spring(response: 0.16, dampingFraction: 0.82)
+
+    private var dragging: Bool { notch.isDockDragging }
+
     private var blobSize: CGSize {
+        if dragging { return ScreenMetrics.dropletSize }
         if notch.toast != nil { return ScreenMetrics.toastSize }
         return notch.openBlobSize(sessionRows: claude.sessions.count)
     }
+    /// Where the blob sits, in screen-space layout coordinates: on its edge,
+    /// or centred under the cursor while it's being dragged.
+    private var blobRect: CGRect {
+        if dragging {
+            let d = ScreenMetrics.dropletSize
+            return CGRect(x: notch.dragCursor.x - d.width / 2, y: notch.dragCursor.y - d.height / 2,
+                          width: d.width, height: d.height)
+        }
+        return ScreenMetrics.blobRect(for: dock, size: blobSize)
+    }
     private var bottomRadius: CGFloat {
+        if dragging { return ScreenMetrics.dropletSize.height / 2 }
         if notch.toast != nil { return 16 }
         let collapsed = ScreenMetrics.collapsedSize(for: dock)
         return notch.isOpen ? 20 : min(10, min(collapsed.width, collapsed.height) / 2)
     }
 
     private var dock: NotchDock { notch.dock }
-    private var dockEdge: Edge {
+    /// The edge the silhouette presses against. While dragging it tracks the
+    /// nearest edge, so the pill already faces the right way when it lands —
+    /// invisible in flight, because the droplet is a symmetric capsule.
+    private var shapeEdge: Edge {
+        Self.edge(for: dragging ? notch.dragTarget : dock)
+    }
+    private static func edge(for dock: NotchDock) -> Edge {
         switch dock { case .top: .top; case .left: .leading; case .right: .trailing }
     }
-    /// The blob hangs from the window's top on every dock (the side windows
-    /// are placed so the collapsed pill still sits centred on the edge). Growing
-    /// from a fixed top edge means the sessions/playlist fold-outs extend
-    /// downward and nothing above them moves — centring the blob made the whole
-    /// card slide up as the panel opened, which jittered the scrubber.
     private var dockAlignment: Alignment {
         switch dock { case .top: .top; case .left: .topLeading; case .right: .topTrailing }
     }
-    private var dockAnchor: UnitPoint {
-        switch dock { case .top: .top; case .left: .leading; case .right: .trailing }
+
+    /// The notch silhouette — or, while dragging, a capsule. Every parameter
+    /// animates, so the tear-off and the landing are a single morph.
+    private var blobShape: NotchShape {
+        NotchShape(cornerInset: dragging ? 0 : 8,
+                   topRadius: dragging ? ScreenMetrics.dropletSize.height / 2 : 0,
+                   bottomRadius: bottomRadius,
+                   edge: shapeEdge)
     }
 
-    private var blobShape: NotchShape { NotchShape(cornerInset: 8, bottomRadius: bottomRadius, edge: dockEdge) }
-
     var body: some View {
-        ZStack {
-            // While a drag is in flight the blob tears off its edge and
-            // vanishes; DockDragOverlay draws the droplet and landing ghost.
-            // It pops back in on the new edge once the droplet has landed.
-            if !notch.isDockDragging {
-                dockedBlob
-                    .transition(.scale(scale: 0.6, anchor: dockAnchor).combined(with: .opacity))
+        ZStack(alignment: .topLeading) {
+            // Landing ghosts: the collapsed pill's silhouette on every edge the
+            // notch can dock to, shown for the whole drag so the options are
+            // visible. The one nearest the cursor is lit; the others sit back.
+            ForEach(NotchDock.allCases, id: \.self) { ghostDock in
+                let rect = ScreenMetrics.blobRect(for: ghostDock, size: ScreenMetrics.collapsedSize(for: ghostDock))
+                let lit = ghostDock == notch.dragTarget
+                let shape = NotchShape(cornerInset: 8, bottomRadius: 10, edge: Self.edge(for: ghostDock))
+                shape
+                    .fill(Color.white.opacity(lit ? 0.10 : 0.035))
+                    .overlay(
+                        shape.stroke(Color.white.opacity(lit ? 0.65 : 0.26),
+                                     style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    )
+                    .frame(width: rect.width, height: rect.height)
+                    .offset(x: rect.minX, y: rect.minY)
+                    .opacity(dragging ? 1 : 0)
+                    .animation(.easeOut(duration: 0.18), value: notch.dragTarget)
+                    .animation(.easeOut(duration: 0.18), value: dragging)
+                    .allowsHitTesting(false)
             }
+
+            blob
+                .frame(width: blobRect.width, height: blobRect.height)
+                .offset(x: blobRect.minX, y: blobRect.minY)
+                // Innermost of the animations keyed on drag state wins, so
+                // this decides how the blob's rect and silhouette move: the
+                // cursor spring while in flight, the landing spring on release.
+                .animation(dragging ? Self.followAnim : Self.landingAnim, value: notch.dragCursor)
+                .animation(dragging ? Self.tearOffAnim : Self.landingAnim, value: dragging)
         }
-        .animation(.spring(response: 0.30, dampingFraction: 0.72), value: notch.isDockDragging)
-        .gesture(dockDragGesture)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// Click-hold-drag anywhere on the blob that isn't already a control tears
@@ -73,7 +122,7 @@ struct NotchRootView: View {
             .onEnded { _ in AppDelegate.shared?.dockDragEnded() }
     }
 
-    private var dockedBlob: some View {
+    private var blob: some View {
         ZStack(alignment: dockAlignment) {
             // Directional drop shadow — a blurred dark capsule positioned just
             // past the blob's free edge (below when top-docked, beside when
@@ -96,9 +145,10 @@ struct NotchRootView: View {
                 .frame(width: blobSize.width, height: blobSize.height)
                 .clipShape(blobShape)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: dockAlignment)
+        .frame(width: blobSize.width, height: blobSize.height)
+        .gesture(dockDragGesture)
         // Hot-corner overlays (Mission Control / App Exposé): retract the blob
-        // past its docked edge — the fixed-size window clips it, so it reads as
+        // past its docked edge — the docked viewport clips it, so it reads as
         // sliding into the bezel. Visible only because the overlay CGS space
         // sits above the Mission Control transition layer. On exit the window
         // comes back with the content still retracted and the spring drops it
@@ -120,7 +170,8 @@ struct NotchRootView: View {
     }
 
     @ViewBuilder private var dockShadow: some View {
-        switch dock {
+        // In flight the droplet casts the top-dock shadow (underneath it).
+        switch dragging ? .top : dock {
         case .top:
             Capsule(style: .continuous)
                 .fill(Color.black.opacity(0.36))
@@ -185,7 +236,9 @@ struct NotchRootView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .foregroundStyle(.white)
                     } else {
-                        CollapsedPeek(namespace: chromeNS, vertical: dock != .top)
+                        // The droplet is a short wide capsule, so in flight it
+                        // shows the horizontal peek whatever edge it left.
+                        CollapsedPeek(namespace: chromeNS, vertical: dock != .top && !dragging)
                     }
                 }
             }

@@ -145,32 +145,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func evaluateHover() {
-        guard let panel else { return }
+        guard panel != nil else { return }
         let notch = env.notch
         if notch.isSystemOverlayActive { return }
         // Mid-drag the blob is wherever the cursor is by definition — hover
-        // logic would only fight the drag controller.
-        if notch.isDockDragging { return }
+        // logic would only fight the drag controller — and while it's still
+        // settling onto its new edge it isn't ready to open.
+        if notch.isDockDragging || notch.isDockLanding { return }
         // The window is always the largest (music-expanded) size; the visible
         // blob may be smaller, so hover-tracking follows the blob, not the
         // frame — anchored to whichever edge the notch is docked on.
-        let wf = panel.frame
         let blobSize = notch.openBlobSize(sessionRows: env.claude.sessions.count)
-        let blobRect: NSRect
-        switch notch.dock {
-        case .top:
-            blobRect = NSRect(x: wf.midX - blobSize.width / 2,
-                              y: wf.maxY - blobSize.height,
-                              width: blobSize.width, height: blobSize.height)
-        case .left:
-            blobRect = NSRect(x: wf.minX,
-                              y: wf.maxY - blobSize.height,
-                              width: blobSize.width, height: blobSize.height)
-        case .right:
-            blobRect = NSRect(x: wf.maxX - blobSize.width,
-                              y: wf.maxY - blobSize.height,
-                              width: blobSize.width, height: blobSize.height)
-        }
+        let blobRect = ScreenMetrics.blobScreenRect(for: notch.dock, size: blobSize)
 
         let mouse = NSEvent.mouseLocation
 
