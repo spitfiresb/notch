@@ -17,6 +17,7 @@ struct NowPlayingInfo: Equatable {
     var elapsed: Double?        // seconds at `elapsedAt`
     var elapsedAt: Date?        // wall-clock time when `elapsed` was sampled
     var isPodcast = false       // spoken-word item: transport skips by seconds, not tracks
+    var playbackRate: Double = 1 // 1.5 = playing at 1.5x; only meaningful while playing
     var hasContent: Bool { !title.isEmpty }
 
     /// Where the playhead is *right now*: the last sampled position, extrapolated by
@@ -24,7 +25,7 @@ struct NowPlayingInfo: Equatable {
     var liveElapsed: Double {
         guard let e = elapsed else { return 0 }
         guard isPlaying, let at = elapsedAt else { return e }
-        return e + Date().timeIntervalSince(at)
+        return e + Date().timeIntervalSince(at) * playbackRate
     }
 }
 
@@ -100,6 +101,22 @@ final class NowPlayingManager: ObservableObject {
         var target = info.liveElapsed + seconds
         if let d = info.duration, d > 0 { target = min(target, d) }
         seek(to: target)   // `seek` clamps the low end at 0
+    }
+
+    /// Podcast playback speeds the `1x` button cycles through. Spotify offers more
+    /// (0.5 ... 3.5) but a tap-to-cycle control wants a short loop.
+    static let playbackRates: [Double] = [1, 1.2, 1.5, 2]
+
+    /// Step to the next entry in `playbackRates` (wrapping). MediaRemote only --
+    /// Spotify's Apple Events dictionary has no speed control -- so on the
+    /// AppleScript fallback path this is a no-op.
+    func cyclePlaybackRate() {
+        let rates = Self.playbackRates
+        let idx = rates.firstIndex { abs($0 - info.playbackRate) < 0.01 } ?? -1
+        let next = rates[(idx + 1) % rates.count]
+        guard !usingSpotifyFallback, mr.setPlaybackRate(next) else { return }
+        info.playbackRate = next   // optimistic; the next poll confirms
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.refresh() }
     }
 
     /// Seek the current track to `seconds`. Tries MediaRemote first; falls back to
@@ -255,7 +272,10 @@ enum ColorAccent {
 // MARK: - MediaRemote (private framework) bridge
 
 final class MediaRemoteBridge {
-    enum Command: Int { case play = 0, pause = 1, togglePlayPause = 2, stop = 3, nextTrack = 4, previousTrack = 5 }
+    enum Command: Int {
+        case play = 0, pause = 1, togglePlayPause = 2, stop = 3, nextTrack = 4, previousTrack = 5
+        case changePlaybackRate = 19   // options: kMRMediaRemoteOptionPlaybackRate
+    }
 
     private typealias GetInfoFn     = @convention(c) (DispatchQueue, @escaping (CFDictionary?) -> Void) -> Void
     private typealias GetPlayingFn  = @convention(c) (DispatchQueue, @escaping (Bool) -> Void) -> Void
@@ -293,8 +313,13 @@ final class MediaRemoteBridge {
         }
     }
 
-    func sendCommand(_ command: Command) -> Bool {
-        sendCommandFn?(command.rawValue, nil) ?? false
+    func sendCommand(_ command: Command, options: [String: Any]? = nil) -> Bool {
+        sendCommandFn?(command.rawValue, options as CFDictionary?) ?? false
+    }
+
+    @discardableResult
+    func setPlaybackRate(_ rate: Double) -> Bool {
+        sendCommand(.changePlaybackRate, options: ["kMRMediaRemoteOptionPlaybackRate": rate])
     }
 
     @discardableResult
@@ -326,6 +351,7 @@ final class MediaRemoteBridge {
             }
             let rate = (raw["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double) ?? 0
             info.isPlaying = rate > 0
+            if rate > 0 { info.playbackRate = rate }   // paused reports 0; keep the last real speed
             info.duration = raw["kMRMediaRemoteNowPlayingInfoDuration"] as? Double
             if let elapsed = raw["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double {
                 info.elapsed = elapsed
