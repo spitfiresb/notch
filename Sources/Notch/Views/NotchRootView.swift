@@ -306,6 +306,7 @@ private struct CollapsedPeek: View {
     var vertical: Bool = false
     @EnvironmentObject private var music: NowPlayingManager
     @EnvironmentObject private var claude: ClaudeSessionStore
+    @EnvironmentObject private var notch: NotchState
 
     /// Show whenever there's *any* track loaded; we just freeze the bars when paused
     /// so the user can still see what's playing at a glance.
