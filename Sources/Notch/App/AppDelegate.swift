@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var trackpadGestureActive = false
 
     func applicationWillTerminate(_ notification: Notification) {
+        env.claude.shutdown()
         SpaceAttacher.detach()
     }
 
