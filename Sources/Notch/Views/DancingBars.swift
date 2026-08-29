@@ -13,13 +13,13 @@ struct DancingBars: View {
     /// above the playing-state floor (0.10) so pausing the music doesn't visually
     /// pop the bars upward.
     private static let restHeight: CGFloat = 0.14
-    private static let barWidth: CGFloat = 1.8
-    private static let spacing: CGFloat = 1.3
+    var barWidth: CGFloat = 1.8
+    var spacing: CGFloat = 1.3
     private static let count = AudioMeter.bandCount
 
     var body: some View {
         if !isPlaying {
-            HStack(alignment: .center, spacing: Self.spacing) {
+            HStack(alignment: .center, spacing: spacing) {
                 ForEach(0..<Self.count, id: \.self) { _ in
                     bar(height: Self.restHeight)
                 }
@@ -30,7 +30,7 @@ struct DancingBars: View {
             // (per-band attack/release); this short easeOut just interpolates
             // between successive publishes so the bar visibly travels through
             // middle values at frame rate instead of stepping in discrete jumps.
-            HStack(alignment: .center, spacing: Self.spacing) {
+            HStack(alignment: .center, spacing: spacing) {
                 ForEach(0..<Self.count, id: \.self) { i in
                     bar(height: meter.bars[i])
                 }
@@ -42,7 +42,7 @@ struct DancingBars: View {
             // (120 Hz on ProMotion) for a wiggle nobody can see that fast.
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
-                HStack(alignment: .center, spacing: Self.spacing) {
+                HStack(alignment: .center, spacing: spacing) {
                     ForEach(0..<Self.count, id: \.self) { i in
                         bar(height: scale(t, phase: Double(i) * 1.1))
                     }
@@ -57,7 +57,7 @@ struct DancingBars: View {
         // its own range). A `max()` here would silently squash the meter's floor.
         Capsule(style: .continuous)
             .fill(color)
-            .frame(width: Self.barWidth)
+            .frame(width: barWidth)
             .frame(maxHeight: .infinity)
             .scaleEffect(y: height, anchor: .center)
     }
@@ -70,3 +70,24 @@ struct DancingBars: View {
     }
 }
 
+
+/// `DancingBars` turned to run along an upright pill: the six bars stack
+/// top-to-bottom and each one reaches sideways, so on a side dock the meter
+/// uses the pill's length instead of being squeezed into its width.
+struct LengthwiseBars: View {
+    var color: Color = .white
+    var isPlaying: Bool = true
+    /// How far a full bar reaches (across the pill).
+    var reach: CGFloat = 20
+    var barWidth: CGFloat = 3
+    var spacing: CGFloat = 3
+
+    private var thickness: CGFloat { CGFloat(AudioMeter.bandCount) * barWidth + CGFloat(AudioMeter.bandCount - 1) * spacing }
+
+    var body: some View {
+        DancingBars(color: color, isPlaying: isPlaying, barWidth: barWidth, spacing: spacing)
+            .frame(width: thickness, height: reach)
+            .rotationEffect(.degrees(90))
+            .frame(width: reach, height: thickness)
+    }
+}

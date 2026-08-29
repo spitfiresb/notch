@@ -4,9 +4,11 @@ struct MusicTabView: View {
     /// Shared with `CollapsedPeek` so `matchedGeometryEffect` can morph the
     /// artwork and bars between the peek's small layout and our larger one.
     let namespace: Namespace.ID
-    /// Side-docked: the card is portrait, so the tab stacks top-to-bottom
-    /// (big art, centred title, bars, progress, transport) instead of the
-    /// landscape header row.
+    /// Side-docked: the open notch is a slim upright strip, so the tab stacks
+    /// down it — art, title/artist turned like a book spine, the lengthwise
+    /// meter, then the transport buttons one under another. No scrubber or
+    /// playlist panel; there's no room, and the podcast skip buttons cover
+    /// getting around an episode.
     var vertical: Bool = false
     @EnvironmentObject private var music: NowPlayingManager
     @EnvironmentObject private var spotify: SpotifyLibrary
@@ -18,8 +20,80 @@ struct MusicTabView: View {
     private static let trackFade: Animation = .easeInOut(duration: 0.34)
 
     var body: some View {
-        VStack(spacing: vertical ? 7 : 5) {
-            if vertical { portraitHeader } else { landscapeHeader }
+        if vertical { strip } else { landscape }
+    }
+
+    private var strip: some View {
+        VStack(spacing: 8) {
+            artwork
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .matchedGeometryEffect(id: "chromeArt", in: namespace)
+            spine
+            LengthwiseBars(color: music.displayAccent, isPlaying: info.isPlaying,
+                           reach: 40, barWidth: 3, spacing: 3)
+                .matchedGeometryEffect(id: "chromeBars", in: namespace)
+                .opacity(info.hasContent ? 1 : 0)
+            transportStack
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(Self.trackFade, value: music.displayKey)
+        .animation(Self.trackFade, value: info.title)
+        .animation(Self.trackFade, value: info.artist)
+        .animation(Self.trackFade, value: music.displayAccent)
+    }
+
+    /// Title and artist rotated a quarter turn clockwise so they read down the
+    /// strip like a spine. Laid out flat at `spineLength` × 30, then turned and
+    /// re-framed to the space the turned block actually occupies.
+    private static let spineLength: CGFloat = 96
+    private var spine: some View {
+        VStack(spacing: 1) {
+            MarqueeText(info.hasContent ? info.title : "Nothing playing",
+                        font: .system(size: 12, weight: .semibold))
+            if info.hasContent {
+                MarqueeText(info.artist, font: .system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .frame(width: Self.spineLength, height: 30)
+        .rotationEffect(.degrees(90))
+        .frame(width: 30, height: Self.spineLength)
+    }
+
+    /// Transport one button under another. Podcasts get the full Spotify
+    /// episode set (speed · ⟲ · ⏮ · ⏯ · ⏭ · ⟳); songs just ⏮ ⏯ ⏭.
+    private var transportStack: some View {
+        VStack(spacing: 2) {
+            if info.isPodcast {
+                TransportButton(glyph: .text(rateLabel), size: 11, enabled: info.hasContent) {
+                    music.cyclePlaybackRate()
+                }
+                TransportButton(symbol: "gobackward.\(skipSeconds)", size: 12, enabled: info.hasContent) {
+                    music.skip(by: -Double(skipSeconds))
+                }
+                TransportButton(symbol: "backward.end.fill", size: 12, enabled: info.hasContent) { music.previous() }
+            } else {
+                TransportButton(symbol: "backward.fill", size: 12, enabled: info.hasContent) { music.previous() }
+            }
+            PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
+                music.togglePlayPause()
+            }
+            if info.isPodcast {
+                TransportButton(symbol: "forward.end.fill", size: 12, enabled: info.hasContent) { music.next() }
+                TransportButton(symbol: "goforward.\(skipSeconds)", size: 12, enabled: info.hasContent) {
+                    music.skip(by: Double(skipSeconds))
+                }
+            } else {
+                TransportButton(symbol: "forward.fill", size: 12, enabled: info.hasContent) { music.next() }
+            }
+        }
+    }
+
+    private var landscape: some View {
+        VStack(spacing: 5) {
+            landscapeHeader
 
             // Middle: elapsed · progress · remaining (draggable scrubber)
             MusicProgressLine(info: info) { music.seek(to: $0) }
@@ -45,32 +119,6 @@ struct MusicTabView: View {
         .animation(Self.trackFade, value: info.title)
         .animation(Self.trackFade, value: info.artist)
         .animation(Self.trackFade, value: music.displayAccent)
-    }
-
-    /// Side-dock header: art large and centred, title and artist beneath it,
-    /// the dancing bars under those where the landscape layout has them at
-    /// the far right.
-    private var portraitHeader: some View {
-        VStack(spacing: 6) {
-            artwork
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .matchedGeometryEffect(id: "chromeArt", in: namespace)
-            VStack(spacing: 2) {
-                MarqueeText(info.hasContent ? info.title : "Nothing playing",
-                            font: .system(size: 13, weight: .semibold), alignment: .center)
-                if info.hasContent {
-                    MarqueeText(info.artist, font: .system(size: 11), alignment: .center)
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-            }
-            if info.hasContent {
-                DancingBars(color: music.displayAccent,
-                            isPlaying: info.isPlaying)
-                    .frame(width: 20, height: 12)
-                    .matchedGeometryEffect(id: "chromeBars", in: namespace)
-            }
-        }
     }
 
     private var landscapeHeader: some View {
@@ -106,7 +154,7 @@ struct MusicTabView: View {
     private var transportRow: some View {
             ZStack {
                 if info.isPodcast {
-                    HStack(spacing: vertical ? 12 : 14) {
+                    HStack(spacing: 14) {
                         TransportButton(glyph: .text(rateLabel), size: 12, enabled: info.hasContent) {
                             music.cyclePlaybackRate()
                         }
@@ -122,13 +170,11 @@ struct MusicTabView: View {
                             music.skip(by: Double(skipSeconds))
                         }
                     }
-                    // The Claude spinner (SessionsCorner) overlays the bottom corner of
-                    // the tab area while a session runs; in the landscape card the
-                    // six-wide row reaches under it, so give up that strip and re-centre
-                    // in what's left. The portrait card keeps the spinner on its own
-                    // strip below the row, so nothing to dodge there.
+                    // The Claude spinner (SessionsCorner) overlays the bottom-right of
+                    // the tab area while a session runs; the six-wide row reaches under
+                    // it, so give up that strip and re-centre in what's left.
                     .frame(maxWidth: .infinity)
-                    .padding(.trailing, claude.anyActive && !vertical ? Self.spinnerReserve : 0)
+                    .padding(.trailing, claude.anyActive ? Self.spinnerReserve : 0)
                     .animation(.spring(response: 0.36, dampingFraction: 0.8), value: claude.anyActive)
                 } else {
                     HStack(spacing: 26) {

@@ -168,7 +168,7 @@ struct NotchRootView: View {
                                 .frame(height: notch.sessionsPanelExpanded
                                        ? ScreenMetrics.expandedSize(for: dock).height - 20 : nil)
                                 .padding(.horizontal, contentInset)
-                                .padding(.top, 10)
+                                .padding(.top, dock == .top ? 10 : 24)   // strip: clear the gear
                                 .padding(.bottom, 10)
                             if notch.sessionsPanelExpanded {
                                 SessionsPanel()
@@ -233,7 +233,7 @@ struct NotchRootView: View {
 
     /// Side inset of the tab content. The portrait card is narrower, and gives
     /// the room back to the content so the six-button podcast row still fits.
-    private var contentInset: CGFloat { dock == .top ? 22 : 18 }
+    private var contentInset: CGFloat { dock == .top ? 22 : 8 }
 
     /// Corner controls (gear, Claude spinner) sit on the blob's free side — the
     /// right, except when the notch is docked to the right edge and the right
@@ -343,8 +343,9 @@ private struct CollapsedPeek: View {
         .padding(.horizontal, 22)
     }
 
-    /// Same elements top-to-bottom: art up where the pill meets the edge's
-    /// midpoint, bars at the foot, the Claude spinner sliding in above them.
+    /// Upright pill, top-to-bottom: art at the head, the meter running down
+    /// the middle (bars reaching sideways, stacked along the length), and the
+    /// Claude spinner at the foot when a session is working.
     private var verticalPeek: some View {
         VStack(spacing: 0) {
             artwork
@@ -353,18 +354,17 @@ private struct CollapsedPeek: View {
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
-            if claude.anyActive {
-                ClaudeSpinner(state: claude.headlineState, size: 13)
-                    .padding(.bottom, 10)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            DancingBars(color: music.displayAccent,
-                        isPlaying: music.info.isPlaying)
-                .frame(width: 18, height: 14)
+            LengthwiseBars(color: music.displayAccent,
+                           isPlaying: music.info.isPlaying, reach: 18)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
                 .opacity(showing ? 1 : 0)
+            Spacer(minLength: 0)
+            if claude.anyActive {
+                ClaudeSpinner(state: claude.headlineState, size: 13)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
-        .padding(.vertical, 16)
+        .padding(.vertical, 14)
     }
 
     @ViewBuilder private var artwork: some View {

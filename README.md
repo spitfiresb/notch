@@ -116,7 +116,7 @@ Everything happens in the notch: no extra tab, no window, no daemon. Turn it on 
 
 ### Lives on any edge
 
-The top of the screen is only the default. Click-hold the open notch and drag: it lifts off as a black droplet under the cursor while a grey outlined pill appears on whichever edge is nearest — top, left, or right — showing exactly where it will land. Let go and the droplet springs into that outline and becomes the notch. Side-docked, the whole thing is designed upright: a slim vertical pill (art at the top, bars at the foot) that opens into a portrait card — big centred artwork, title, scrubber, transport — with the screenshots tab reflowed to a two-column grid. The choice persists across launches.
+The top of the screen is only the default. Click-hold the open notch and drag: it lifts off as a black droplet under the cursor while a grey outlined pill appears on whichever edge is nearest — top, left, or right — showing exactly where it will land. Let go and the droplet springs into that outline and becomes the notch. Side-docked, the whole thing is designed upright: a slim vertical pill — art at the head, the audio meter running lengthwise down the middle (six bars reaching sideways), the Claude spinner at the foot — that opens into a strip barely wider than itself: artwork, title and artist turned like a book spine, the meter, and the transport buttons one under another (the full podcast set when an episode is playing). Screenshots stack down it as small thumbnails. The choice persists across launches.
 
 Layouts for every dock and state can be rendered offscreen with `swift test` (PNGs land in `.build/renders/`), so the side-dock design was checked without a cursor in the way.
 

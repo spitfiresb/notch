@@ -55,12 +55,13 @@ enum ScreenMetrics {
     /// height: a 30 pt pill reads as a handle on the side, where the 37 pt
     /// hardware-notch thickness would look like a bar.
     static let sidePillSize = CGSize(width: 30, height: 180)
-    /// Open card on a vertical edge: tall enough for the music tab laid out
-    /// top-to-bottom (art · title · bars · progress · transport) plus the
-    /// sessions strip, and wide enough for the six-button podcast row.
-    static let sideExpandedSize = CGSize(width: 260, height: 256)
+    /// Open strip on a vertical edge: barely wider than the pill, with the
+    /// music tab stacked down it (art · spine-rotated title · bars · transport)
+    /// and the Claude spinner at the foot. The playlist and sessions panels
+    /// don't fit a strip and stay top-dock-only.
+    static let sideExpandedSize = CGSize(width: 72, height: 400)
     /// Side-dock counterpart of `expandedMusicSize` — the window's fixed size.
-    static let sideExpandedMusicSize = CGSize(width: 260, height: 380)
+    static let sideExpandedMusicSize = CGSize(width: 72, height: 400)
 
     static func collapsedSize(for dock: NotchDock) -> CGSize {
         dock == .top ? notchSize : sidePillSize

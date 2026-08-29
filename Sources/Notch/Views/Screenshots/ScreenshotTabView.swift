@@ -6,8 +6,8 @@ final class ScrollActivity { var isScrolling = false }
 
 struct ScreenshotTabView: View {
     @EnvironmentObject private var screenshots: ScreenshotWatcher
-    /// Side-docked: the card is portrait, so the strip becomes a two-column
-    /// grid that scrolls down instead of a row that scrolls sideways.
+    /// Side-docked: the open notch is a slim strip, so the thumbnails go one
+    /// under another, scaled to fit, and scroll down instead of sideways.
     var vertical: Bool = false
 
     private static let thumbWidth: CGFloat = 104
@@ -21,14 +21,12 @@ struct ScreenshotTabView: View {
 
     var body: some View {
         if screenshots.shots.isEmpty {
-            EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here")
+            EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here", compact: vertical)
         } else if vertical {
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVGrid(columns: [GridItem(.fixed(Self.thumbWidth), spacing: Self.spacing),
-                                    GridItem(.fixed(Self.thumbWidth), spacing: Self.spacing)],
-                          spacing: Self.spacing) {
+                VStack(spacing: Self.spacing) {
                     ForEach(screenshots.shots, id: \.self) { url in
-                        ScreenshotThumb(url: url, activity: activity)
+                        ScreenshotThumb(url: url, activity: activity, size: CGSize(width: 56, height: 35))
                     }
                 }
             }
@@ -79,6 +77,7 @@ private struct ScrollOffsetKey: PreferenceKey {
 private struct ScreenshotThumb: View {
     let url: URL
     let activity: ScrollActivity
+    var size = CGSize(width: 104, height: 64)
     @State private var image: NSImage?
     @State private var date: Date?
     @State private var hovering = false
@@ -91,7 +90,7 @@ private struct ScreenshotThumb: View {
                 Color.white.opacity(0.07)
             }
         }
-        .frame(width: 104, height: 64)
+        .frame(width: size.width, height: size.height)
         .overlay(alignment: .bottom) {
             if hovering {
                 Text(relativeTime(date))
