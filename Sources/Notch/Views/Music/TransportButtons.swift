@@ -3,19 +3,42 @@ import SwiftUI
 /// Side transport (⏮ / ⏭) — slightly grey by default, brightens & scales up on hover.
 /// Hover and release use springs (gentle bounce / pop), press-down is a snappy ease.
 struct TransportButton: View {
-    let symbol: String
+    enum Glyph { case symbol(String), text(String) }
+    let glyph: Glyph
     let size: CGFloat
     let enabled: Bool
     let action: () -> Void
 
+    init(symbol: String, size: CGFloat, enabled: Bool, action: @escaping () -> Void) {
+        self.init(glyph: .symbol(symbol), size: size, enabled: enabled, action: action)
+    }
+
+    init(glyph: Glyph, size: CGFloat, enabled: Bool, action: @escaping () -> Void) {
+        self.glyph = glyph; self.size = size; self.enabled = enabled; self.action = action
+    }
+
     @State private var hovering = false
     @State private var pressed = false
 
+    /// Text glyphs ("1.5x") run wider than a symbol; give them room to grow so the
+    /// row doesn't reflow when the speed changes.
+    private var width: CGFloat {
+        if case .text = glyph { return size + 22 }
+        return size + 12
+    }
+
+    @ViewBuilder private var label: some View {
+        switch glyph {
+        case .symbol(let name): Image(systemName: name)
+        case .text(let s): Text(s).monospacedDigit().lineLimit(1).fixedSize()
+        }
+    }
+
     var body: some View {
-        Image(systemName: symbol)
+        label
             .font(.system(size: size, weight: .medium))
             .foregroundStyle(.white.opacity(hovering ? 1 : 0.55))
-            .frame(width: size + 12, height: size + 8)
+            .frame(width: width, height: size + 8)
             .contentShape(Rectangle())
             .scaleEffect(scale)
             // press DOWN: snappy ease; press UP: spring with overshoot for the iOS-style "pop".
@@ -32,7 +55,7 @@ struct TransportButton: View {
                     .onEnded { v in
                         pressed = false
                         guard enabled else { return }
-                        let bounds = CGRect(x: 0, y: 0, width: size + 12, height: size + 8)
+                        let bounds = CGRect(x: 0, y: 0, width: width, height: size + 8)
                         if bounds.contains(v.location) { action() }
                     }
             )

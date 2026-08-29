@@ -33,10 +33,22 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(claudeSessionsEnabled, forKey: Keys.claudeSessions) }
     }
 
+    /// How far the podcast transport buttons jump, in seconds. Spotify's own player
+    /// is fixed at 15 both ways; 30 is the other interval people reach for, so we
+    /// offer both rather than hard-coding one.
+    @Published var podcastSkipSeconds: Int {
+        didSet { UserDefaults.standard.set(podcastSkipSeconds, forKey: Keys.podcastSkip) }
+    }
+
+    /// The intervals offered in Settings. `gobackward.N` / `goforward.N` SF Symbols
+    /// only exist for a fixed set of values, and these two are in it.
+    static let podcastSkipOptions = [15, 30]
+
     private enum Keys {
         static let claudeSessions = "settings.claudeSessionsEnabled"
         static let copyScreenshot = "settings.copyScreenshotToClipboard"
         static let launchAtLoginSeeded = "settings.launchAtLogin.seeded"
+        static let podcastSkip = "settings.podcastSkipSeconds"
     }
 
     /// The managed folder we point macOS at when routing is enabled.
@@ -55,6 +67,10 @@ final class SettingsStore: ObservableObject {
             defaults.set(true, forKey: Keys.claudeSessions)
         }
         claudeSessionsEnabled = defaults.bool(forKey: Keys.claudeSessions)
+        // Default to Spotify's own 15 s. Guard against a stale/garbage value so the
+        // button never asks for an SF Symbol that doesn't exist.
+        let storedSkip = defaults.integer(forKey: Keys.podcastSkip)
+        podcastSkipSeconds = Self.podcastSkipOptions.contains(storedSkip) ? storedSkip : 15
         // Routing reflects the live system pref — the user (or this app) may have
         // already pointed `screencapture` somewhere; mirror reality, don't overwrite it.
         routeScreenshotsToFolder = Self.detectScreenshotRouting()
