@@ -365,13 +365,15 @@ private struct CollapsedPeek: View {
                            reach: 14, barWidth: 1.8, spacing: 1.3)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
                 .opacity(showing ? 1 : 0)
-            Spacer(minLength: 0)
+            // Like the top pill, the spinner slides in past the bars at the far
+            // end and nudges them inward; gone again when the session finishes.
             if claude.anyActive {
-                ClaudeSpinner(state: claude.headlineState, size: 12)
+                ClaudeSpinner(state: claude.headlineState, size: 13)
+                    .padding(.top, 8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 18)
     }
 
     @ViewBuilder private var artwork: some View {

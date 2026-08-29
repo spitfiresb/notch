@@ -56,12 +56,11 @@ enum ScreenMetrics {
     // collapsed, and when open a portrait card that grows out from the edge.
     // Everything below is the side-dock counterpart of the top-dock sizes above.
 
-    /// Collapsed pill on a vertical edge. Deliberately not tied to the menu-bar
-    /// height: a slim 26 pt pill reads as a handle on the side, where the 37 pt
-    /// hardware-notch thickness would look like a bar, and short enough to
-    /// stay out of the way — it only needs room for the art, a small meter,
-    /// and the Claude spinner.
-    static let sidePillSize = CGSize(width: 26, height: 120)
+    /// Collapsed pill on a vertical edge: the top pill's contents (14 pt art,
+    /// the small meter, the Claude spinner) at the top pill's sizes, with the
+    /// run of black between them cut to about half. 36 pt thick gives the
+    /// 14 pt art the same breathing room the 37 pt top pill gives it.
+    static let sidePillSize = CGSize(width: 36, height: 150)
     /// Open strip on a vertical edge: barely wider than the pill, with the
     /// music tab stacked down it (art · spine-rotated title · bars · transport)
     /// and the Claude spinner at the foot. The playlist and sessions panels
