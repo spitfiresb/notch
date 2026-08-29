@@ -20,7 +20,7 @@ struct NotchRootView: View {
     private var transitionAnim: Animation { notch.isOpen ? Self.openAnim : Self.closeAnim }
 
     private var blobSize: CGSize {
-        if notch.toast != nil { return ScreenMetrics.toastSize }
+        if notch.toast != nil { return ScreenMetrics.toastSize(for: dock) }
         return notch.openBlobSize(sessionRows: claude.sessions.count)
     }
     private var bottomRadius: CGFloat {
@@ -188,6 +188,10 @@ struct NotchRootView: View {
             .animation(transitionAnim, value: notch.isOpen)
 
             if let toast = notch.toast {
+                // Banners are choreographed left-to-right (Clawd runs the width).
+                // On a side dock the whole banner is laid out flat at its normal
+                // size and turned a quarter turn, so it plays top-to-bottom.
+                let flat = ScreenMetrics.toastSize
                 Group {
                     switch toast {
                     case .screenshot(let t): ScreenshotToastView(toast: t)
@@ -196,6 +200,9 @@ struct NotchRootView: View {
                 }
                 .padding(.horizontal, 14)
                 .foregroundStyle(.white)
+                .frame(width: flat.width, height: flat.height)
+                .rotationEffect(.degrees(dock == .top ? 0 : 90))
+                .frame(width: blobSize.width, height: blobSize.height)
                 .transition(.opacity)
             }
 

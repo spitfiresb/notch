@@ -99,6 +99,20 @@ final class RenderTests: XCTestCase {
               name: "left-open-screenshots")
     }
 
+    func testSideToast() {
+        let env = Env()
+        seed(env, podcast: false)
+        let session = ClaudeSession(id: "abc", cwd: "/Users/me/Desktop/notch",
+                                    lastEventAt: Date(), startedAt: Date())
+        for dock in [NotchDock.top, .right] {
+            env.notch.dock = dock
+            env.notch.toast = .session(SessionToast(session: session, kind: .complete))
+            env.notch.isOpen = true
+            write(env.inject(NotchRootView()).background(Color(red: 0.42, green: 0.45, blue: 0.52)),
+                  size: ScreenMetrics.windowSize(for: dock), name: "\(dock)-toast")
+        }
+    }
+
     func testDragOverlay() {
         // A scaled-down screen: the ghost hugs the target edge, the droplet
         // floats where the cursor is.

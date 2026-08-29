@@ -39,6 +39,7 @@ final class NotchDragController {
         notch.close()
         notch.isDockDragging = true
         Haptics.tick()
+        notchLog("[notch.dock] drag began from \(notch.dock)")
 
         let model = overlay.model
         model.target = notch.dock
@@ -55,6 +56,7 @@ final class NotchDragController {
         let dock = overlay.model.target
         overlay.model.phase = .settling
         Haptics.tick()
+        notchLog("[notch.dock] released → \(dock)")
 
         let work = DispatchWorkItem { [weak self] in self?.land(on: dock) }
         settleWork = work
@@ -69,6 +71,7 @@ final class NotchDragController {
             panel.reposition()
             panel.orderFrontRegardless()
             SpaceAttacher.attachToAllSpaces(panel)
+            notchLog("[notch.dock] landed on \(dock), window \(panel.frame)")
         }
         // The panel's pill fades in on the new edge as the droplet fades out
         // underneath it, so the handoff reads as one object.

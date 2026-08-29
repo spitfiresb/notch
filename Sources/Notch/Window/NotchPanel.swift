@@ -44,6 +44,11 @@ enum ScreenMetrics {
 
     /// Compact size used for the transient "screenshot copied" banner.
     static let toastSize = CGSize(width: 252, height: 46)
+    /// On a side dock the banner is turned a quarter turn so it reads down the
+    /// edge — same banner, sides swapped.
+    static func toastSize(for dock: NotchDock) -> CGSize {
+        dock == .top ? toastSize : CGSize(width: toastSize.height, height: toastSize.width)
+    }
 
     // MARK: Side docks
     //
@@ -170,6 +175,11 @@ final class NotchPanel: NSPanel {
     init(rootView: some View) {
         let host = SwipeHostingView(rootView: AnyView(rootView))
         host.autoresizingMask = [.width, .height]
+        // The window's size is ours (`reposition`), never the content's: with the
+        // default sizing options a blob laid out wider than the window (the 252 pt
+        // banner in the 72 pt side strip) grew the window past the screen edge, and
+        // windows never shrink back — the notch was left drawn off-screen for good.
+        host.sizingOptions = []
         self.hosting = host
 
         super.init(contentRect: NSRect(origin: .zero, size: ScreenMetrics.expandedMusicSize),
