@@ -44,35 +44,16 @@ struct NotchRootView: View {
 
     var body: some View {
         ZStack {
-            if notch.isDockDragging {
-                droplet
-                    .transition(.scale(scale: 0.4).combined(with: .opacity))
-            } else {
+            // While a drag is in flight the blob tears off its edge and
+            // vanishes; DockDragOverlay draws the droplet and landing ghost.
+            // It pops back in on the new edge once the droplet has landed.
+            if !notch.isDockDragging {
                 dockedBlob
                     .transition(.scale(scale: 0.6, anchor: dockAnchor).combined(with: .opacity))
             }
         }
-        // The pill-to-droplet swap: the pill tears off its edge and the droplet
-        // pops in under the cursor (and melts back into a pill on landing).
-        .animation(.spring(response: 0.30, dampingFraction: 0.62), value: notch.isDockDragging)
+        .animation(.spring(response: 0.30, dampingFraction: 0.72), value: notch.isDockDragging)
         .gesture(dockDragGesture)
-    }
-
-    /// The free-floating blob shown while the notch is being dragged between
-    /// docks. It rides the centre of the window (which is chasing the cursor)
-    /// and squashes & stretches with the drag's velocity.
-    private var droplet: some View {
-        RoundedRectangle(cornerRadius: 21, style: .continuous)
-            .fill(.black)
-            .overlay(
-                RoundedRectangle(cornerRadius: 21, style: .continuous)
-                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
-            )
-            .frame(width: 120, height: 42)
-            .scaleEffect(x: notch.dragStretch.width, y: notch.dragStretch.height)
-            .animation(.spring(response: 0.24, dampingFraction: 0.5), value: notch.dragStretch)
-            .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     /// Click-hold-drag anywhere on the blob that isn't already a control tears
@@ -185,14 +166,14 @@ struct NotchRootView: View {
                             tabContent
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .frame(height: notch.sessionsPanelExpanded
-                                       ? ScreenMetrics.expandedSize.height - 20 : nil)
-                                .padding(.horizontal, 22)
+                                       ? ScreenMetrics.expandedSize(for: dock).height - 20 : nil)
+                                .padding(.horizontal, contentInset)
                                 .padding(.top, 10)
                                 .padding(.bottom, 10)
                             if notch.sessionsPanelExpanded {
                                 SessionsPanel()
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                                    .padding(.horizontal, 22)
+                                    .padding(.horizontal, contentInset)
                                     .padding(.bottom, 10)
                                     .transition(.opacity)
                             }
@@ -220,10 +201,13 @@ struct NotchRootView: View {
 
             // Claude spinner in the bottom-right corner of the tab area while a
             // session is working; hovering it unfolds the sessions panel.
+            // Placed with `offset`, not padding: padding takes part in layout,
+            // and an inset taller than the collapsed side pill (216 pt into a
+            // 180 pt pill) would inflate the stack and shove the peek out of
+            // the clip. Offsets leave layout alone.
             SessionsCorner()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(.top, SessionsCorner.stripTopInset)
-                .padding(.trailing, 22)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: freeCornerAlignment)
+                .offset(x: dock == .right ? 22 : -22, y: SessionsCorner.stripTopInset(for: dock))
                 .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
                 .allowsHitTesting(notch.isOpen && notch.toast == nil)
                 .animation(.easeOut(duration: 0.22), value: notch.isOpen)
@@ -231,9 +215,8 @@ struct NotchRootView: View {
             // Tiny settings gear, top-right of the expanded panel. Sits just past
             // where the music tab's dancing bars end; grows on hover.
             SettingsGearButton { AppDelegate.shared?.showSettingsWindow() }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(.top, 4)
-                .padding(.trailing, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: freeCornerAlignment)
+                .offset(x: dock == .right ? 12 : -12, y: 4)
                 .opacity(notch.isOpen && notch.toast == nil ? 1 : 0)
                 .allowsHitTesting(notch.isOpen && notch.toast == nil)
                 .animation(.easeOut(duration: 0.22), value: notch.isOpen)
@@ -243,10 +226,19 @@ struct NotchRootView: View {
 
     @ViewBuilder private var tabContent: some View {
         switch notch.tab {
-        case .music:       MusicTabView(namespace: chromeNS)
-        case .screenshots: ScreenshotTabView()
+        case .music:       MusicTabView(namespace: chromeNS, vertical: dock != .top)
+        case .screenshots: ScreenshotTabView(vertical: dock != .top)
         }
     }
+
+    /// Side inset of the tab content. The portrait card is narrower, and gives
+    /// the room back to the content so the six-button podcast row still fits.
+    private var contentInset: CGFloat { dock == .top ? 22 : 18 }
+
+    /// Corner controls (gear, Claude spinner) sit on the blob's free side — the
+    /// right, except when the notch is docked to the right edge and the right
+    /// side is the one pressed against the screen.
+    private var freeCornerAlignment: Alignment { dock == .right ? .topLeading : .topTrailing }
 }
 
 /// Tiny gear in the corner of the expanded notch. Default state is barely there
@@ -356,23 +348,23 @@ private struct CollapsedPeek: View {
     private var verticalPeek: some View {
         VStack(spacing: 0) {
             artwork
-                .frame(width: 14, height: 14)
-                .clipShape(Rectangle())
+                .frame(width: 16, height: 16)
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
             if claude.anyActive {
                 ClaudeSpinner(state: claude.headlineState, size: 13)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 10)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             DancingBars(color: music.displayAccent,
                         isPlaying: music.info.isPlaying)
-                .frame(width: 20, height: 14)
+                .frame(width: 18, height: 14)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
                 .opacity(showing ? 1 : 0)
         }
-        .padding(.vertical, 20)
+        .padding(.vertical, 16)
     }
 
     @ViewBuilder private var artwork: some View {

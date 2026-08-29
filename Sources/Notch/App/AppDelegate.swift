@@ -194,12 +194,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !notch.isOpen {
                 notch.open()
             } else if notch.sessionsPanelExpanded,
-                      mouse.y > blobRect.maxY - SessionsCorner.stripTopInset {
+                      mouse.y > blobRect.maxY - SessionsCorner.stripTopInset(for: notch.dock) {
                 // Cursor moved back up into the regular tab area (above the
                 // spinner strip that opened the panel) — fold the panel away.
                 notch.sessionsPanelExpanded = false
             } else if !notch.sessionsPanelExpanded, notch.toast == nil, env.claude.anyActive,
-                      SessionsCorner.hitRect(inBlob: blobRect).contains(mouse) {
+                      SessionsCorner.hitRect(inBlob: blobRect, dock: notch.dock).contains(mouse) {
                 // Hovering the Claude spinner in the bottom-right corner
                 // unfolds the sessions panel. Done here (geometry) rather than
                 // via SwiftUI's onHover so it can't miss a fast cursor.

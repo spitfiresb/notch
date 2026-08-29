@@ -60,6 +60,16 @@ final class NowPlayingManager: ObservableObject {
     /// under an id-only cache a podcast re-probed Spotify on every single refresh.
     private var spotifyURICache: [String: String] = [:]
 
+#if DEBUG
+    /// Render-harness hook: seed the published state without any player running.
+    func debugSeed(info: NowPlayingInfo, art: NSImage?, accent: Color) {
+        self.info = info
+        displayArt = art
+        displayAccent = accent
+        displayKey = "\(info.artist)\u{1}\(info.title)"
+    }
+#endif
+
     func start() {
         mr.registerForNotifications { [weak self] in self?.refresh() }
         // Spotify announces every play/pause/track change via a distributed

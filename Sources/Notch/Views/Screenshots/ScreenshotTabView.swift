@@ -6,6 +6,9 @@ final class ScrollActivity { var isScrolling = false }
 
 struct ScreenshotTabView: View {
     @EnvironmentObject private var screenshots: ScreenshotWatcher
+    /// Side-docked: the card is portrait, so the strip becomes a two-column
+    /// grid that scrolls down instead of a row that scrolls sideways.
+    var vertical: Bool = false
 
     private static let thumbWidth: CGFloat = 104
     private static let spacing: CGFloat = 8
@@ -19,6 +22,17 @@ struct ScreenshotTabView: View {
     var body: some View {
         if screenshots.shots.isEmpty {
             EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here")
+        } else if vertical {
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVGrid(columns: [GridItem(.fixed(Self.thumbWidth), spacing: Self.spacing),
+                                    GridItem(.fixed(Self.thumbWidth), spacing: Self.spacing)],
+                          spacing: Self.spacing) {
+                    ForEach(screenshots.shots, id: \.self) { url in
+                        ScreenshotThumb(url: url, activity: activity)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Self.spacing) {

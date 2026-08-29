@@ -13,14 +13,18 @@ struct MarqueeText: View {
     var speed: CGFloat = 28
     /// How long the text sits still at the start of every loop.
     var hold: TimeInterval = 1.0
+    /// Where the text sits when it fits (scrolling text always runs from the
+    /// leading edge). Centre it under centred artwork in the portrait card.
+    var alignment: Alignment = .leading
 
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
     @State private var epoch = Date()
 
-    init(_ text: String, font: Font) {
+    init(_ text: String, font: Font, alignment: Alignment = .leading) {
         self.text = text
         self.font = font
+        self.alignment = alignment
     }
 
     private var overflows: Bool { containerWidth > 0 && textWidth > containerWidth + 0.5 }
@@ -33,7 +37,7 @@ struct MarqueeText: View {
             .lineLimit(1)
             .contentTransition(.opacity)
             .opacity(overflows ? 0 : 1)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: alignment)
             .background(measure { containerWidth = $0 })
             // Unconstrained copy in the background so it never affects layout.
             .background(

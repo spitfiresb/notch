@@ -45,14 +45,32 @@ enum ScreenMetrics {
     /// Compact size used for the transient "screenshot copied" banner.
     static let toastSize = CGSize(width: 252, height: 46)
 
-    /// Collapsed pill when docked to a vertical edge — the top pill turned 90°:
-    /// as thick as the menu bar is tall, long enough to grab and to read.
-    static var sidePillSize: CGSize {
-        CGSize(width: max(24, menuBarHeight), height: 180)
-    }
+    // MARK: Side docks
+    //
+    // Docked to a vertical edge the notch stands upright: a slim pill when
+    // collapsed, and when open a portrait card that grows out from the edge.
+    // Everything below is the side-dock counterpart of the top-dock sizes above.
+
+    /// Collapsed pill on a vertical edge. Deliberately not tied to the menu-bar
+    /// height: a 30 pt pill reads as a handle on the side, where the 37 pt
+    /// hardware-notch thickness would look like a bar.
+    static let sidePillSize = CGSize(width: 30, height: 180)
+    /// Open card on a vertical edge: tall enough for the music tab laid out
+    /// top-to-bottom (art · title · bars · progress · transport) plus the
+    /// sessions strip, and wide enough for the six-button podcast row.
+    static let sideExpandedSize = CGSize(width: 260, height: 256)
+    /// Side-dock counterpart of `expandedMusicSize` — the window's fixed size.
+    static let sideExpandedMusicSize = CGSize(width: 260, height: 380)
 
     static func collapsedSize(for dock: NotchDock) -> CGSize {
         dock == .top ? notchSize : sidePillSize
+    }
+    static func expandedSize(for dock: NotchDock) -> CGSize {
+        dock == .top ? expandedSize : sideExpandedSize
+    }
+    /// The fixed window size for a dock — the largest blob it can show.
+    static func windowSize(for dock: NotchDock) -> CGSize {
+        dock == .top ? expandedMusicSize : sideExpandedMusicSize
     }
 
     /// Frame of the fixed-size window for a dock: flush against the docked edge,
@@ -60,7 +78,7 @@ enum ScreenMetrics {
     static func windowFrame(for dock: NotchDock) -> NSRect {
         guard let s = screen else { return .zero }
         let sf = s.frame
-        let size = expandedMusicSize
+        let size = windowSize(for: dock)
         switch dock {
         case .top:
             return NSRect(x: (sf.minX + sf.maxX) / 2 - size.width / 2,
