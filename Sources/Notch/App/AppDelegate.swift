@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let env = AppEnvironment()
     private var panel: NotchPanel?
+    private var dragController: NotchDragController?
     private var onboarding: OnboardingWindowController?
     private var cancellables = Set<AnyCancellable>()
     private var hoverTimer: Timer?
@@ -48,7 +49,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(env.claude)
         let panel = NotchPanel(rootView: root)
         self.panel = panel
+        panel.dock = env.notch.dock
+        dragController = NotchDragController(panel: panel, notch: env.notch)
         panel.show()
+
+        // Keep the window's idea of its edge in sync with state (drag-and-drop
+        // writes both, but a future programmatic change should also stick).
+        env.notch.$dock
+            .removeDuplicates()
+            .sink { [weak panel] dock in panel?.dock = dock }
+            .store(in: &cancellables)
 
         panel.onHorizontalSwipe = { [weak self] dir in self?.cycleTab(by: dir) }
 
@@ -138,14 +148,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let panel else { return }
         let notch = env.notch
         if notch.isSystemOverlayActive { return }
-        // The window is always the tallest (music-expanded) size; the visible
-        // blob may be smaller, so hover-tracking follows the blob, not the frame.
+        // Mid-drag the blob is wherever the cursor is by definition — hover
+        // logic would only fight the drag controller.
+        if notch.isDockDragging { return }
+        // The window is always the largest (music-expanded) size; the visible
+        // blob may be smaller, so hover-tracking follows the blob, not the
+        // frame — anchored to whichever edge the notch is docked on.
         let wf = panel.frame
         let blobSize = notch.openBlobSize(sessionRows: env.claude.sessions.count)
-        let blobRect = NSRect(x: wf.midX - blobSize.width / 2,
+        let blobRect: NSRect
+        switch notch.dock {
+        case .top:
+            blobRect = NSRect(x: wf.midX - blobSize.width / 2,
                               y: wf.maxY - blobSize.height,
-                              width: blobSize.width,
-                              height: blobSize.height)
+                              width: blobSize.width, height: blobSize.height)
+        case .left:
+            blobRect = NSRect(x: wf.minX,
+                              y: wf.midY - blobSize.height / 2,
+                              width: blobSize.width, height: blobSize.height)
+        case .right:
+            blobRect = NSRect(x: wf.maxX - blobSize.width,
+                              y: wf.midY - blobSize.height / 2,
+                              width: blobSize.width, height: blobSize.height)
+        }
 
         let mouse = NSEvent.mouseLocation
 
@@ -210,6 +235,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // produce a Dock-owned window that looks like Mission Control to our
         // heuristic, and orderOut'ing mid-gesture would yank the panel.
         if trackpadGestureActive { return }
+        // Same story mid-drag: the spaces heuristic can misread the shuffling
+        // and orderOut the very window the user is holding.
+        if env.notch.isDockDragging { return }
         let active = AppDelegate.dockOverlayOnScreen()
         if env.notch.isSystemOverlayActive != active {
             notchLog("[notch.ov] isSystemOverlayActive -> \(active)")
@@ -305,6 +333,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch.tab = tabs[new]
         Haptics.tick()
     }
+
+    /// First movement of a click-hold on the blob (from NotchRootView's gesture).
+    func dockDragBegan() { dragController?.begin() }
+    /// Release of that press. The controller also watches the physical button
+    /// state directly, so a missed call here can't strand the drag.
+    func dockDragEnded() { dragController?.end() }
 
     func showOnboarding() {
         let controller = OnboardingWindowController(

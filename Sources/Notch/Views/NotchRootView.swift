@@ -25,23 +25,76 @@ struct NotchRootView: View {
     }
     private var bottomRadius: CGFloat {
         if notch.toast != nil { return 16 }
-        return notch.isOpen ? 20 : min(10, ScreenMetrics.notchSize.height / 2)
+        let collapsed = ScreenMetrics.collapsedSize(for: dock)
+        return notch.isOpen ? 20 : min(10, min(collapsed.width, collapsed.height) / 2)
     }
 
-    private var blobShape: NotchShape { NotchShape(cornerInset: 8, bottomRadius: bottomRadius) }
+    private var dock: NotchDock { notch.dock }
+    private var dockEdge: Edge {
+        switch dock { case .top: .top; case .left: .leading; case .right: .trailing }
+    }
+    private var dockAlignment: Alignment {
+        switch dock { case .top: .top; case .left: .leading; case .right: .trailing }
+    }
+    private var dockAnchor: UnitPoint {
+        switch dock { case .top: .top; case .left: .leading; case .right: .trailing }
+    }
+
+    private var blobShape: NotchShape { NotchShape(cornerInset: 8, bottomRadius: bottomRadius, edge: dockEdge) }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // Directional drop shadow — a blurred dark capsule positioned just under
-            // the blob's bottom edge. The all-around `.shadow()` we used to apply on
-            // the blob bled into the 8 pt cornerInset strips on the sides, painting
-            // them faintly gray; this confines the shadow to below the notch where it
-            // actually wants to be.
-            Capsule(style: .continuous)
-                .fill(Color.black.opacity(0.36))
-                .frame(width: max(0, blobSize.width - 40), height: 10)
-                .blur(radius: 10)
-                .offset(y: blobSize.height - 4)
+        ZStack {
+            if notch.isDockDragging {
+                droplet
+                    .transition(.scale(scale: 0.4).combined(with: .opacity))
+            } else {
+                dockedBlob
+                    .transition(.scale(scale: 0.6, anchor: dockAnchor).combined(with: .opacity))
+            }
+        }
+        // The pill-to-droplet swap: the pill tears off its edge and the droplet
+        // pops in under the cursor (and melts back into a pill on landing).
+        .animation(.spring(response: 0.30, dampingFraction: 0.62), value: notch.isDockDragging)
+        .gesture(dockDragGesture)
+    }
+
+    /// The free-floating blob shown while the notch is being dragged between
+    /// docks. It rides the centre of the window (which is chasing the cursor)
+    /// and squashes & stretches with the drag's velocity.
+    private var droplet: some View {
+        RoundedRectangle(cornerRadius: 21, style: .continuous)
+            .fill(.black)
+            .overlay(
+                RoundedRectangle(cornerRadius: 21, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            )
+            .frame(width: 120, height: 42)
+            .scaleEffect(x: notch.dragStretch.width, y: notch.dragStretch.height)
+            .animation(.spring(response: 0.24, dampingFraction: 0.5), value: notch.dragStretch)
+            .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    /// Click-hold-drag anywhere on the blob that isn't already a control tears
+    /// the notch off its edge. The gesture's coordinates are irrelevant — the
+    /// drag controller follows the real cursor — it only marks the press's
+    /// lifetime. Child gestures (transport, scrubber, gear…) win in their areas.
+    private var dockDragGesture: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+            .onChanged { _ in
+                if !notch.isDockDragging { AppDelegate.shared?.dockDragBegan() }
+            }
+            .onEnded { _ in AppDelegate.shared?.dockDragEnded() }
+    }
+
+    private var dockedBlob: some View {
+        ZStack(alignment: dockAlignment) {
+            // Directional drop shadow — a blurred dark capsule positioned just
+            // past the blob's free edge (below when top-docked, beside when
+            // side-docked). The all-around `.shadow()` we used to apply on the
+            // blob bled into the 8 pt cornerInset strips, painting them faintly
+            // gray; this confines the shadow to where it actually wants to be.
+            dockShadow
 
             blobShape
                 .fill(.black)
@@ -57,16 +110,16 @@ struct NotchRootView: View {
                 .frame(width: blobSize.width, height: blobSize.height)
                 .clipShape(blobShape)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Hot-corner overlays (Mission Control / App Exposé): retract the blob up
-        // past the window's top edge — the fixed-size window clips it, so it
-        // reads as sliding into the bezel. Visible only because the overlay CGS
-        // space sits above the Mission Control transition layer. On exit the
-        // window comes back with the content still retracted and the spring
-        // drops it down. dampingFraction must be 1.0: any underdamped spring
-        // overshoots *below* rest, revealing a sliver of screen above the blob's
-        // flat top.
-        .offset(y: notch.isSystemOverlayActive ? -(blobSize.height + 24) : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: dockAlignment)
+        // Hot-corner overlays (Mission Control / App Exposé): retract the blob
+        // past its docked edge — the fixed-size window clips it, so it reads as
+        // sliding into the bezel. Visible only because the overlay CGS space
+        // sits above the Mission Control transition layer. On exit the window
+        // comes back with the content still retracted and the spring drops it
+        // back in. dampingFraction must be 1.0: any underdamped spring
+        // overshoots past rest, revealing a sliver of screen beyond the blob's
+        // flat edge.
+        .offset(retractOffset)
         .animation(notch.isSystemOverlayActive
                    ? .easeIn(duration: 0.26)
                    : .spring(response: 0.40, dampingFraction: 1.0),
@@ -78,6 +131,38 @@ struct NotchRootView: View {
         .animation(Self.openAnim, value: claude.sessions.count)
         .animation(transitionAnim, value: notch.toast)
         // Hover open/close is driven by AppDelegate's cursor watcher.
+    }
+
+    @ViewBuilder private var dockShadow: some View {
+        switch dock {
+        case .top:
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.36))
+                .frame(width: max(0, blobSize.width - 40), height: 10)
+                .blur(radius: 10)
+                .offset(y: blobSize.height - 4)
+        case .left:
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.36))
+                .frame(width: 10, height: max(0, blobSize.height - 40))
+                .blur(radius: 10)
+                .offset(x: blobSize.width - 4)
+        case .right:
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.36))
+                .frame(width: 10, height: max(0, blobSize.height - 40))
+                .blur(radius: 10)
+                .offset(x: -(blobSize.width - 4))
+        }
+    }
+
+    private var retractOffset: CGSize {
+        guard notch.isSystemOverlayActive else { return .zero }
+        switch dock {
+        case .top:   return CGSize(width: 0, height: -(blobSize.height + 24))
+        case .left:  return CGSize(width: -(blobSize.width + 24), height: 0)
+        case .right: return CGSize(width: blobSize.width + 24, height: 0)
+        }
     }
 
     /// `if/else` between the peek and the tab (instead of opacity-toggling both)
@@ -115,7 +200,7 @@ struct NotchRootView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .foregroundStyle(.white)
                     } else {
-                        CollapsedPeek(namespace: chromeNS)
+                        CollapsedPeek(namespace: chromeNS, vertical: dock != .top)
                     }
                 }
             }
@@ -218,6 +303,8 @@ private struct SettingsGearButton: View {
 /// than cross-fading two separate copies.
 private struct CollapsedPeek: View {
     let namespace: Namespace.ID
+    /// Side-docked pills stand upright, so the peek stacks vertically.
+    var vertical: Bool = false
     @EnvironmentObject private var music: NowPlayingManager
     @EnvironmentObject private var claude: ClaudeSessionStore
 
@@ -228,6 +315,16 @@ private struct CollapsedPeek: View {
     private static let trackFade: Animation = .easeInOut(duration: 0.34)
 
     var body: some View {
+        Group {
+            if vertical { verticalPeek } else { horizontalPeek }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.spring(response: 0.36, dampingFraction: 0.8), value: claude.anyActive)
+        .animation(Self.trackFade, value: music.displayKey)
+        .animation(Self.trackFade, value: music.displayAccent)
+    }
+
+    private var horizontalPeek: some View {
         HStack(spacing: 0) {
             artwork
                 .frame(width: 14, height: 14)
@@ -252,10 +349,30 @@ private struct CollapsedPeek: View {
             }
         }
         .padding(.horizontal, 22)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.spring(response: 0.36, dampingFraction: 0.8), value: claude.anyActive)
-        .animation(Self.trackFade, value: music.displayKey)
-        .animation(Self.trackFade, value: music.displayAccent)
+    }
+
+    /// Same elements top-to-bottom: art up where the pill meets the edge's
+    /// midpoint, bars at the foot, the Claude spinner sliding in above them.
+    private var verticalPeek: some View {
+        VStack(spacing: 0) {
+            artwork
+                .frame(width: 14, height: 14)
+                .clipShape(Rectangle())
+                .matchedGeometryEffect(id: "chromeArt", in: namespace)
+                .opacity(showing && music.displayArt != nil ? 1 : 0)
+            Spacer(minLength: 0)
+            if claude.anyActive {
+                ClaudeSpinner(state: claude.headlineState, size: 13)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            DancingBars(color: music.displayAccent,
+                        isPlaying: music.info.isPlaying)
+                .frame(width: 20, height: 14)
+                .matchedGeometryEffect(id: "chromeBars", in: namespace)
+                .opacity(showing ? 1 : 0)
+        }
+        .padding(.vertical, 20)
     }
 
     @ViewBuilder private var artwork: some View {

@@ -163,7 +163,7 @@ final class NotchState: ObservableObject {
     /// Blob size while open. The sessions panel is only as tall as its rows
     /// (capped at the music-panel height, the window's fixed size).
     func openBlobSize(sessionRows: Int) -> CGSize {
-        guard isOpen else { return ScreenMetrics.notchSize }
+        guard isOpen else { return ScreenMetrics.collapsedSize(for: dock) }
         if tab == .music && musicPanelExpanded { return ScreenMetrics.expandedMusicSize }
         guard sessionsPanelExpanded else { return ScreenMetrics.expandedSize }
         let h = ScreenMetrics.expandedSize.height + SessionsPanel.height(rows: sessionRows) + 10
@@ -176,6 +176,18 @@ final class NotchState: ObservableObject {
     @Published var musicPanelExpanded = false {
         didSet { if musicPanelExpanded { sessionsPanelExpanded = false } }
     }
+
+    /// Which screen edge the notch is docked to. Set by dragging the blob
+    /// (NotchDragController), persisted across launches.
+    @Published var dock: NotchDock = NotchDock.stored {
+        didSet { dock.store() }
+    }
+    /// True from the moment a drag tears the blob off its edge until it has
+    /// settled onto its new one. The root view shows the droplet and the hover
+    /// watcher stands down while this is set.
+    @Published var isDockDragging = false
+    /// Squash & stretch applied to the droplet, driven by the drag's velocity.
+    @Published var dragStretch = CGSize(width: 1, height: 1)
 
     /// `true` while Mission Control / App Exposé / Launchpad / Show Desktop is on
     /// screen. The panel is fully hidden then so it doesn't cover the system overlay.

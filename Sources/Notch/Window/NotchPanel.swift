@@ -44,13 +44,46 @@ enum ScreenMetrics {
 
     /// Compact size used for the transient "screenshot copied" banner.
     static let toastSize = CGSize(width: 252, height: 46)
+
+    /// Collapsed pill when docked to a vertical edge — the top pill turned 90°:
+    /// as thick as the menu bar is tall, long enough to grab and to read.
+    static var sidePillSize: CGSize {
+        CGSize(width: max(24, menuBarHeight), height: 180)
+    }
+
+    static func collapsedSize(for dock: NotchDock) -> CGSize {
+        dock == .top ? notchSize : sidePillSize
+    }
+
+    /// Frame of the fixed-size window for a dock: flush against the docked edge,
+    /// centred along it.
+    static func windowFrame(for dock: NotchDock) -> NSRect {
+        guard let s = screen else { return .zero }
+        let sf = s.frame
+        let size = expandedMusicSize
+        switch dock {
+        case .top:
+            return NSRect(x: (sf.minX + sf.maxX) / 2 - size.width / 2,
+                          y: sf.maxY - size.height,
+                          width: size.width, height: size.height)
+        case .left:
+            return NSRect(x: sf.minX, y: sf.midY - size.height / 2,
+                          width: size.width, height: size.height)
+        case .right:
+            return NSRect(x: sf.maxX - size.width, y: sf.midY - size.height / 2,
+                          width: size.width, height: size.height)
+        }
+    }
 }
 
-/// The classic macOS notch silhouette: flat against the screen top with little
-/// reverse curves at the upper corners and rounded lower corners.
+/// The classic macOS notch silhouette: flat against its screen edge with little
+/// reverse curves where it meets the edge and rounded corners on the free side.
+/// `edge` picks which screen edge the flat side presses against; the silhouette
+/// is drawn top-docked and axis-swapped into place for the vertical edges.
 struct NotchShape: Shape {
     var cornerInset: CGFloat = 8     // the small reverse curve where it meets the screen edge
     var bottomRadius: CGFloat = 12
+    var edge: Edge = .top
 
     var animatableData: CGFloat {
         get { bottomRadius }
@@ -58,6 +91,25 @@ struct NotchShape: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
+        switch edge {
+        case .top, .bottom:
+            return flatTopPath(in: rect)
+        case .leading:
+            // Transpose (x, y) -> (y, x): the flat top edge lands on the left
+            // edge. The silhouette is symmetric, so the mirroring a transpose
+            // implies is invisible.
+            let base = flatTopPath(in: CGRect(x: 0, y: 0, width: rect.height, height: rect.width))
+            return base.applying(CGAffineTransform(a: 0, b: 1, c: 1, d: 0,
+                                                   tx: rect.minX, ty: rect.minY))
+        case .trailing:
+            // (x, y) -> (W - y, x): the flat edge lands on the right.
+            let base = flatTopPath(in: CGRect(x: 0, y: 0, width: rect.height, height: rect.width))
+            return base.applying(CGAffineTransform(a: 0, b: 1, c: -1, d: 0,
+                                                   tx: rect.minX + rect.width, ty: rect.minY))
+        }
+    }
+
+    private func flatTopPath(in rect: CGRect) -> Path {
         let r = min(bottomRadius, rect.height / 2)
         let c = min(cornerInset, rect.width / 2)
         var p = Path()
@@ -83,6 +135,10 @@ struct NotchShape: Shape {
 /// Mouse events are ignored while collapsed so the menu bar underneath stays usable.
 final class NotchPanel: NSPanel {
     private let hosting: SwipeHostingView<AnyView>
+
+    /// Which screen edge the window hugs. AppDelegate mirrors `NotchState.dock`
+    /// into this; `reposition()` reads it so every re-show lands on the right edge.
+    var dock: NotchDock = .top
 
     /// Callback fired on a horizontal two-finger swipe over the panel. `dir` is +1
     /// for swipe-left (→ next tab) and -1 for swipe-right (→ previous tab), matching
@@ -138,13 +194,9 @@ final class NotchPanel: NSPanel {
     }
 
     func reposition() {
-        guard let screen = ScreenMetrics.screen else { return }
-        let sf = screen.frame
-        let size = ScreenMetrics.expandedMusicSize
-        setFrame(NSRect(x: (sf.minX + sf.maxX) / 2 - size.width / 2,
-                        y: sf.maxY - size.height,
-                        width: size.width, height: size.height),
-                 display: true)
+        let f = ScreenMetrics.windowFrame(for: dock)
+        guard f.width > 0 else { return }
+        setFrame(f, display: true)
     }
 
     func show() {
