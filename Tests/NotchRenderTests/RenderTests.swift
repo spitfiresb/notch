@@ -25,6 +25,7 @@ final class RenderTests: XCTestCase {
         let audioMeter = AudioMeter()
         let settings = SettingsStore()
         let claude = ClaudeSessionStore()
+        let cursor = CursorTracker()
 
         func inject<V: View>(_ v: V) -> some View {
             v.environmentObject(notch)
@@ -34,6 +35,7 @@ final class RenderTests: XCTestCase {
                 .environmentObject(audioMeter)
                 .environmentObject(settings)
                 .environmentObject(claude)
+                .environmentObject(cursor)
         }
     }
 

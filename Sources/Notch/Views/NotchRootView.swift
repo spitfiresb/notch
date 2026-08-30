@@ -320,7 +320,7 @@ private struct SettingsGearButton: View {
             .scaleEffect(scale)
             .frame(width: 18, height: 18)
             .contentShape(Rectangle())
-            .onHover { hovering = $0 }
+            .trackedHover { hovering = $0 }
             // DragGesture(minimumDistance: 0) fires reliably on the first click
             // inside a `.nonactivatingPanel`; SwiftUI's `.onTapGesture` here needs
             // a focus-stealing first click before it recognizes a tap.

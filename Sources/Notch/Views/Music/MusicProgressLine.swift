@@ -75,7 +75,7 @@ struct MusicProgressLine: View {
                 .frame(height: expanded ? 5 : 2.5)
                 .animation(.easeOut(duration: 0.14), value: expanded)
             }
-            .onHover { hovering = $0 }
+            .trackedHover { hovering = $0 }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { v in

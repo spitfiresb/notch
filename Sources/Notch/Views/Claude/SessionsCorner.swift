@@ -59,7 +59,7 @@ struct SessionsCorner: View {
         }
         .frame(width: 24, height: Self.stripHeight)
         .contentShape(Rectangle())
-        .onHover { inside in
+        .trackedHover { inside in
             if inside, claude.anyActive, !notch.sessionsPanelExpanded {
                 notch.sessionsPanelExpanded = true
             }

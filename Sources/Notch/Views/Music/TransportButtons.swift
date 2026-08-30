@@ -48,7 +48,7 @@ struct TransportButton: View {
                        value: pressed)
             .animation(.spring(response: 0.32, dampingFraction: 0.62), value: hovering)
             .opacity(enabled ? 1 : 0.3)
-            .onHover { if enabled { hovering = $0 } }
+            .trackedHover { if enabled { hovering = $0 } }
             .gesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .local)
                     .onChanged { _ in if enabled && !pressed { pressed = true } }
@@ -109,7 +109,7 @@ struct PlayPauseButton: View {
                    value: pressed)
         .animation(.spring(response: 0.32, dampingFraction: 0.62), value: hovering)
         .opacity(enabled ? 1 : 0.3)
-        .onHover { if enabled { hovering = $0 } }
+        .trackedHover { if enabled { hovering = $0 } }
         .gesture(
             DragGesture(minimumDistance: 0, coordinateSpace: .local)
                 .onChanged { _ in if enabled && !pressed { pressed = true } }

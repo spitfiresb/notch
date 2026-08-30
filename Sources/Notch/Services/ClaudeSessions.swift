@@ -62,6 +62,9 @@ struct ClaudeSession: Identifiable, Equatable {
     var subagentCount = 0
     var turnStartedAt: Date?
     var turnEndedAt: Date?
+    /// When the turn was seen to be cut short by Ctrl-C (from the transcript,
+    /// since no hook fires). Cleared by the next prompt.
+    var interruptedAt: Date?
     var lastEventAt: Date
     var startedAt: Date
 
@@ -111,6 +114,7 @@ final class ClaudeSessionStore: ObservableObject {
     private var livenessTimer: Timer?
     private var pendingBuffer = Data()
     private var tick = 0
+    private let network = NetworkActivityMonitor()
     /// True while folding the spool that accumulated before launch: state is
     /// rebuilt silently, no toasts for events that are already history.
     private var replaying = false
@@ -148,10 +152,15 @@ final class ClaudeSessionStore: ObservableObject {
                 guard let self else { return }
                 self.readNew()
                 self.tick += 1
+                self.detectInterrupts()
+                self.detectSilentInterrupts()
                 if self.tick % 3 == 0 { self.reapDead() }
             }
         }
     }
+
+    /// Tear down the nettop child so it doesn't outlive the app.
+    func shutdown() { network.watch([]) }
 
     func setHooksEnabled(_ enabled: Bool) {
         if enabled { ClaudeHooks.install() } else { ClaudeHooks.uninstall() }
@@ -286,17 +295,26 @@ final class ClaudeSessionStore: ObservableObject {
             s.state = .thinking
             s.turnStartedAt = ts
             s.turnEndedAt = nil
+            s.interruptedAt = nil
             s.attention = nil
             s.activity = nil
             s.lastReply = nil
             s.subagentCount = 0
             s.lastPrompt = Self.snippet(e["prompt"] as? String)
         case "PreToolUse":
+            // A hook from the turn that was just interrupted can land after we
+            // flipped the session to done; don't let it wake the spinner back
+            // up. Only briefly, though: a later tool call means the turn is
+            // genuinely still going (the interrupt call was wrong) and wins.
+            if let t = s.interruptedAt, ts.timeIntervalSince(t) < Self.interruptHookGrace { break }
+            s.interruptedAt = nil
             s.state = .tool
             s.attention = nil
             s.activity = Self.describeTool(name: e["tool_name"] as? String,
                                            input: e["tool_input"] as? [String: Any])
         case "PostToolUse", "PostToolUseFailure":
+            if let t = s.interruptedAt, ts.timeIntervalSince(t) < Self.interruptHookGrace { break }
+            s.interruptedAt = nil
             s.state = .thinking
             if name == "PostToolUseFailure", let err = e["tool_error"] as? String {
                 s.activity = "⚠︎ \(Self.snippet(err, max: 60) ?? "tool failed")"
@@ -317,8 +335,20 @@ final class ClaudeSessionStore: ObservableObject {
                 s.waitingReason = type == "permission_prompt" ? .permission : .question
                 s.attention = Self.snippet(msg, max: 90) ?? "Needs your input"
             case "idle_prompt":
-                // Claude has been sitting at the prompt for a while — it's done, not blocked.
-                if s.state == .done || s.state == .idle { s.state = .done }
+                // Claude has been sitting at the prompt for ~60 s — it's done, not
+                // blocked. If we still had it as busy, the turn was cut short by
+                // Ctrl-C before it produced any output: no hook fires for that and
+                // nothing is written to the transcript, so this is the only signal
+                // there is. Late, but it lands.
+                if s.isBusy {
+                    s.state = .done
+                    s.activity = nil
+                    s.turnEndedAt = ts
+                    s.interruptedAt = ts
+                    s.lastReply = "Interrupted"
+                } else if s.state == .done || s.state == .idle {
+                    s.state = .done
+                }
             default: break
             }
         case "Stop":
@@ -349,7 +379,9 @@ final class ClaudeSessionStore: ObservableObject {
         byID[id] = s
         notchLog("claude-sessions: \(name) \(s.projectName) id=\(id.prefix(8)) pid=\(s.pid.map(String.init) ?? "?") tty=\(s.tty ?? "?") state=\(s.state) \(s.activity ?? s.attention ?? "")")
         publish()
-        if !replaying, s.state != previous, s.state == .waiting || s.state == .done || s.state == .failed {
+        // No nudge for a turn the user cut short themselves.
+        if !replaying, s.state != previous, s.interruptedAt == nil,
+           s.state == .waiting || s.state == .done || s.state == .failed {
             onAttention?(s)
         }
     }
@@ -357,6 +389,113 @@ final class ClaudeSessionStore: ObservableObject {
     private func publish() {
         let list = Array(byID.values)
         if list != sessions { sessions = list }
+    }
+
+    /// Ctrl-C mid-turn fires no hook at all, so an interrupted session would sit
+    /// "busy" (spinner up) until the next prompt. Claude Code does record the
+    /// interrupt in the transcript, so for busy sessions whose transcript has
+    /// grown since we last looked, peek at its tail. Runs every second; a
+    /// `stat` per busy session is all it costs when nothing has changed.
+    private var transcriptSizes: [String: UInt64] = [:]
+
+    /// How long after an interrupt call tool hooks from the old turn are ignored.
+    private static let interruptHookGrace: TimeInterval = 3
+
+    /// Ctrl-C while the model is still thinking — before it has produced any
+    /// output — writes nothing to the transcript and fires no hook, so
+    /// `detectInterrupts` can't see it. The wire can: a turn in flight is an
+    /// open API stream delivering bytes every second, and aborting closes it.
+    /// Sessions waiting on the model whose process has gone quiet for a few
+    /// seconds have no turn any more. (Tool phases are exempt — a long `bash`
+    /// is silent on the network by nature — and are covered by the transcript
+    /// path, since a tool interrupt is recorded there.)
+    private static let silenceWindow: TimeInterval = 6
+    /// Below this many inbound bytes over `silenceWindow` counts as silence.
+    /// Measured: a live stream never delivered less than 2.4 KB in any 6 s
+    /// window (tokens or pings); an idle `claude` never more than 750 B (the
+    /// odd keepalive). 4 s windows overlapped (940 B vs 740 B) and misfired.
+    private static let silenceBytes: UInt64 = 1200
+    /// Don't judge a session until its last hook event is this old — a fresh
+    /// prompt or tool result takes a moment to turn into a request.
+    private static let settleAfterEvent: TimeInterval = 5
+
+    private func detectSilentInterrupts() {
+        // Keep the counters running for every busy session (tool phases
+        // included, so nettop isn't restarted around each tool call); only
+        // sessions waiting on the model are judged.
+        network.watch(Set(byID.values.filter(\.isBusy).compactMap(\.pid)))
+        let waiting = byID.values.filter { ($0.state == .thinking || $0.state == .compacting) && $0.pid != nil }
+        let now = Date()
+        var changed = false
+        for s in waiting {
+            guard let pid = s.pid, now.timeIntervalSince(s.lastEventAt) >= Self.settleAfterEvent,
+                  let bytes = network.bytesIn(pid, over: Self.silenceWindow, now: now),
+                  bytes < Self.silenceBytes else { continue }
+            var u = s
+            u.state = .done
+            u.activity = nil
+            u.turnEndedAt = now
+            u.interruptedAt = now
+            u.lastReply = "Interrupted"
+            byID[s.id] = u
+            changed = true
+            notchLog("claude-sessions: interrupted \(u.projectName) id=\(s.id.prefix(8)) — \(bytes) B in over \(Int(Self.silenceWindow)) s, no stream")
+        }
+        if changed { publish() }
+    }
+
+    private func detectInterrupts() {
+        var changed = false
+        let now = Date()
+        for (id, s) in byID where s.isBusy {
+            guard let path = s.transcriptPath,
+                  let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let size = (attrs[.size] as? NSNumber)?.uint64Value,
+                  transcriptSizes[id] != size else { continue }
+            transcriptSizes[id] = size
+            guard Self.transcriptEndsWithInterrupt(path: path, size: size) else { continue }
+            var u = s
+            u.state = .done
+            u.activity = nil
+            u.turnEndedAt = now
+            u.interruptedAt = now
+            u.lastReply = "Interrupted"
+            byID[id] = u
+            changed = true
+            notchLog("claude-sessions: interrupted \(u.projectName) id=\(id.prefix(8))")
+        }
+        transcriptSizes = transcriptSizes.filter { byID[$0.key] != nil }
+        // No `onAttention` here: the user interrupted it themselves, no toast needed.
+        if changed { publish() }
+    }
+
+    /// True when the transcript's last *message* is the `[Request interrupted by
+    /// user]` (or `… for tool use]`) user turn Claude Code appends on Ctrl-C.
+    /// Claude Code usually writes a `file-history-snapshot`, `system`,
+    /// `last-prompt` or `attachment` record right behind it — often within
+    /// milliseconds — so the interrupt is rarely the literal last line; walk
+    /// back past anything that isn't a user/assistant message. A new prompt
+    /// typed afterwards is a plain user message, so it reads as not interrupted.
+    nonisolated static func transcriptEndsWithInterrupt(path: String, size: UInt64) -> Bool {
+        guard let h = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? h.close() }
+        let window: UInt64 = 64 * 1024
+        try? h.seek(toOffset: size > window ? size - window : 0)
+        guard let data = try? h.readToEnd() else { return false }
+        let text = String(decoding: data, as: UTF8.self)   // tolerant of a torn leading char
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let type = obj["type"] as? String else { continue }
+            switch type {
+            case "assistant": return false
+            case "user":
+                if obj["interruptedMessageId"] != nil { return true }
+                let content = ((obj["message"] as? [String: Any])?["content"] as? [[String: Any]])?.first
+                return (content?["text"] as? String)?.hasPrefix("[Request interrupted") ?? false
+            default: continue   // snapshot / system / last-prompt / attachment …
+            }
+        }
+        return false
     }
 
     /// Drop sessions whose process is gone. Sessions we never managed to pin to

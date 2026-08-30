@@ -94,7 +94,7 @@ private struct ScreenshotThumb: View {
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(hovering ? 0.26 : 0.12)))
         .scaleEffect(hovering ? 0.95 : 1)
         .contentShape(RoundedRectangle(cornerRadius: 6))
-        .onHover { h in
+        .trackedHover { h in
             guard !activity.isScrolling else { return }   // don't fight the scroll
             withAnimation(.easeOut(duration: 0.16)) { hovering = h }
             if h { Haptics.tick() }

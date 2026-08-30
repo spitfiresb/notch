@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var trackpadGestureActive = false
 
     func applicationWillTerminate(_ notification: Notification) {
+        env.claude.shutdown()
         SpaceAttacher.detach()
     }
 
@@ -47,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(env.audioMeter)
             .environmentObject(env.settings)
             .environmentObject(env.claude)
+            .environmentObject(env.cursor)
         let panel = NotchPanel(rootView: root)
         self.panel = panel
         panel.dock = env.notch.dock
@@ -61,6 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         panel.onHorizontalSwipe = { [weak self] dir in self?.cycleTab(by: dir) }
+        // Mouse activity over the panel itself: the global monitor below never
+        // fires for our own windows, so the panel's tracking area is what keeps
+        // hover states (and the tracked cursor) live while the cursor is on it.
+        panel.onMouseActivity = { [weak self] in self?.evaluateHover() }
 
         // Let the menu bar under the collapsed pill stay clickable; capture clicks when open.
         env.notch.$isOpen
@@ -148,6 +154,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard panel != nil else { return }
         let notch = env.notch
         if notch.isSystemOverlayActive { return }
+        // Feed the cursor to the SwiftUI side (trackedHover) in the panel's
+        // screen-space layout coordinates. Done before any early return so
+        // hover styling inside the panel always tracks the real cursor.
+        if let screen = ScreenMetrics.screen {
+            let m = NSEvent.mouseLocation
+            env.cursor.point = screen.frame.contains(m)
+                ? CGPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y) : nil
+        }
         // Mid-drag the blob is wherever the cursor is by definition — hover
         // logic would only fight the drag controller — and while it's still
         // settling onto its new edge it isn't ready to open.
