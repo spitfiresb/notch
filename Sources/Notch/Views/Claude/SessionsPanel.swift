@@ -129,7 +129,7 @@ private struct SessionRow: View {
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
             .fill(.white.opacity(hovering ? 0.10 : 0.05)))
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .trackedHover { hovering = $0 }
         // Same first-click-reliable gesture as the settings gear (see NotchRootView).
         .gesture(DragGesture(minimumDistance: 0).onEnded { v in
             if abs(v.translation.width) < 6, abs(v.translation.height) < 6 { action() }

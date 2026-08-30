@@ -165,7 +165,7 @@ private struct PlaylistToggleRow: View {
         }
         .padding(.vertical, 1)
         .contentShape(Rectangle())
-        .onHover { h in
+        .trackedHover { h in
             withAnimation(.easeOut(duration: 0.12)) { hovering = h }
         }
         .onTapGesture {

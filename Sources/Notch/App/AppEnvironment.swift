@@ -11,6 +11,7 @@ final class AppEnvironment: ObservableObject {
     let audioMeter = AudioMeter()
     let settings = SettingsStore()
     let claude = ClaudeSessionStore()
+    let cursor = CursorTracker()
 
     private var cancellables = Set<AnyCancellable>()
     /// Pending delayed audio-meter teardown after playback pauses.

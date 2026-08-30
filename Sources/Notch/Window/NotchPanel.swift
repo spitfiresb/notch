@@ -228,6 +228,11 @@ final class NotchPanel: NSPanel {
         get { hosting.onHorizontalSwipe }
         set { hosting.onHorizontalSwipe = newValue }
     }
+    /// See `SwipeHostingView.onMouseActivity`.
+    var onMouseActivity: (() -> Void)? {
+        get { hosting.onMouseActivity }
+        set { hosting.onMouseActivity = newValue }
+    }
 
     init(rootView: some View) {
         let host = SwipeHostingView(rootView: AnyView(rootView))
@@ -320,6 +325,40 @@ final class NotchPanel: NSPanel {
 /// horizontal scroller.
 final class SwipeHostingView<Root: View>: NSHostingView<Root> {
     var onHorizontalSwipe: ((Int) -> Void)?
+    /// Fired on every mouse-move / enter / exit over the panel. AppDelegate
+    /// points this at its hover evaluation.
+    var onMouseActivity: (() -> Void)?
+
+    /// Our own tracking area for mouse-moved events over the visible window.
+    /// SwiftUI used to install one for its `.onHover` modifiers, and the whole
+    /// hover pipeline (the AppDelegate local monitor included) fed on the
+    /// events it generated; with the panel's hover now computed from the
+    /// tracked cursor there are no `.onHover`s left, so the events are ours
+    /// to generate.
+    private var moveArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let a = moveArea { removeTrackingArea(a) }
+        let a = NSTrackingArea(rect: .zero,
+                               options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                               owner: self, userInfo: nil)
+        addTrackingArea(a)
+        moveArea = a
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        onMouseActivity?()
+        super.mouseMoved(with: event)
+    }
+    override func mouseEntered(with event: NSEvent) {
+        onMouseActivity?()
+        super.mouseEntered(with: event)
+    }
+    override func mouseExited(with event: NSEvent) {
+        onMouseActivity?()
+        super.mouseExited(with: event)
+    }
 
     private var firedThisGesture = false
     private var lastEventTime: TimeInterval = 0
