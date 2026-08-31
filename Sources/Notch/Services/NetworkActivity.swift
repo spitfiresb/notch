@@ -1,6 +1,6 @@
 import Foundation
 
-/// Per-process inbound byte counters, sampled once a second by a long-lived
+/// Per-process inbound byte counters, sampled once a second by a short-lived
 /// `nettop` for exactly the processes we're asked to watch.
 ///
 /// Why: Ctrl-C while Claude is still thinking (no output yet) leaves no trace
@@ -13,28 +13,35 @@ import Foundation
 /// means the turn is gone.
 ///
 /// `nettop` is the only public way to read another process's byte counters
-/// (the counters behind it are a private framework). One process, spawned only
-/// while there's something to watch, restarted when the pid set changes.
+/// (the counters behind it are a private framework), but its continuous
+/// logging mode (`-L 0`) busy-spins at well over a full core no matter the
+/// `-s` interval — so we take one `-L 1` sample per second instead, which
+/// costs ~6 ms of CPU a piece. The counters are cumulative per process, not
+/// per `nettop` run, so readings compose across invocations exactly as they
+/// did from one long-lived child.
 @MainActor
 final class NetworkActivityMonitor {
     private struct Sample { let at: Date; let bytesIn: UInt64 }
 
-    private var process: Process?
+    private var timer: Timer?
+    /// A sample still in flight — never let spawns pile up behind a slow one.
+    private var sampling = false
     private var watched: Set<pid_t> = []
     private var samples: [pid_t: [Sample]] = [:]
-    private var pending = Data()
 
     /// Keep this many seconds of samples per process.
     private static let horizon: TimeInterval = 12
+    private static let interval: TimeInterval = 1
+    private static let queue = DispatchQueue(label: "notch.net-activity", qos: .utility)
 
-    /// Watch exactly `pids` — start, stop, or restart `nettop` as needed.
+    /// Watch exactly `pids`. Unlike the long-lived child this replaced, a
+    /// changed pid set needs no restart — the next tick simply asks for the
+    /// new set.
     func watch(_ pids: Set<pid_t>) {
         guard pids != watched else { return }
-        stop()
         watched = pids
         samples = samples.filter { pids.contains($0.key) }
-        guard !pids.isEmpty else { return }
-        start(pids)
+        if pids.isEmpty { stop() } else if timer == nil { start() }
     }
 
     /// Bytes received over (at least) the last `window` seconds, or nil when
@@ -48,56 +55,68 @@ final class NetworkActivityMonitor {
 
     // MARK: nettop
 
-    private func start(_ pids: Set<pid_t>) {
+    private func start() {
+        let t = Timer(timeInterval: Self.interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sample() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+        notchLog("net-activity: watching \(watched.sorted())")
+        sample()   // seed the window rather than waiting out the first tick
+    }
+
+    private func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func sample() {
+        guard !sampling, !watched.isEmpty else { return }
+        sampling = true
+        let pids = watched
+        Self.queue.async { [weak self] in
+            let out = Self.runNettop(pids)
+            Task { @MainActor in
+                guard let self else { return }
+                self.sampling = false
+                if let out { self.ingest(out) }
+            }
+        }
+    }
+
+    /// One `-P` per-process, `-L 1` single CSV sample, `-x` raw numbers,
+    /// `-c` collapsed (no per-connection rows), just the `bytes_in` column.
+    private nonisolated static func runNettop(_ pids: Set<pid_t>) -> Data? {
         let p = Process()
-        // Under a pseudo-terminal (`script`): writing to a pipe, nettop
-        // block-buffers and its samples arrive in kilobyte lumps minutes
-        // late; on a tty they come out line by line, every second.
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
-        // -P per-process, -L 0 forever, -s 1 every second, -x raw numbers,
-        // -c collapsed (no per-connection rows), CSV with just bytes_in.
-        var args = ["-q", "/dev/null", "/usr/bin/nettop",
-                    "-P", "-L", "0", "-s", "1", "-x", "-c", "-J", "bytes_in"]
-        for pid in pids { args += ["-p", String(pid)] }
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
+        var args = ["-P", "-L", "1", "-x", "-c", "-J", "bytes_in"]
+        for pid in pids.sorted() { args += ["-p", String(pid)] }
         p.arguments = args
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = FileHandle.nullDevice
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
-            let data = h.availableData
-            guard !data.isEmpty else { return }
-            Task { @MainActor in self?.ingest(data) }
-        }
-        do {
-            try p.run()
-            process = p
-            notchLog("net-activity: watching \(pids.sorted())")
-        } catch {
+        do { try p.run() } catch {
             notchLog("net-activity: nettop failed to start: \(error)")
+            return nil
         }
-    }
-
-    private func stop() {
-        guard let p = process else { return }
-        (p.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        p.terminate()
-        process = nil
-        pending.removeAll()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return data
     }
 
     /// Lines look like `2.1.248.49848,680804,` (process name, then pid, then
-    /// the cumulative counter); a header row `,bytes_in,` precedes each sample.
+    /// the cumulative counter); a header row `,bytes_in,` precedes the sample.
     private func ingest(_ data: Data) {
-        pending.append(data)
         let now = Date()
-        while let nl = pending.firstIndex(of: UInt8(ascii: "\n")) {
-            let line = String(decoding: pending[pending.startIndex..<nl], as: UTF8.self)
-                .trimmingCharacters(in: .init(charactersIn: "\r"))   // tty line endings
-            pending.removeSubrange(pending.startIndex...nl)
-            let fields = line.split(separator: ",", omittingEmptySubsequences: false)
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            let fields = line.trimmingCharacters(in: .init(charactersIn: "\r"))
+                .split(separator: ",", omittingEmptySubsequences: false)
             guard fields.count >= 2, !fields[0].isEmpty,
                   let pidText = fields[0].split(separator: ".").last, let pid = pid_t(pidText),
-                  let bytes = UInt64(fields[1]) else { continue }
+                  let bytes = UInt64(fields[1]),
+                  // A sample can land after `watch` dropped the pid — don't
+                  // resurrect counters for something we no longer track.
+                  watched.contains(pid) else { continue }
             var list = samples[pid] ?? []
             list.append(Sample(at: now, bytesIn: bytes))
             list.removeAll { now.timeIntervalSince($0.at) > Self.horizon }

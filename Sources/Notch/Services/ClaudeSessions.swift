@@ -421,8 +421,9 @@ final class ClaudeSessionStore: ObservableObject {
 
     private func detectSilentInterrupts() {
         // Keep the counters running for every busy session (tool phases
-        // included, so nettop isn't restarted around each tool call); only
-        // sessions waiting on the model are judged.
+        // included, so a session that flips tool -> thinking already has a
+        // full window of history to judge); only sessions waiting on the
+        // model are judged.
         network.watch(Set(byID.values.filter(\.isBusy).compactMap(\.pid)))
         let waiting = byID.values.filter { ($0.state == .thinking || $0.state == .compacting) && $0.pid != nil }
         let now = Date()
