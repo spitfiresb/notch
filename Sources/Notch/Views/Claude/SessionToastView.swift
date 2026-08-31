@@ -131,7 +131,11 @@ struct SessionToastView: View {
             let w = geo.size.width
             let spriteH = Self.spriteHeight
             let spriteW = ClawdSprite.width(forHeight: spriteH)
-            TimelineView(.animation) { ctx in
+            // Capped at 40 fps: uncapped .animation runs at display refresh
+            // (120 Hz on ProMotion), and every frame relayouts the hosting
+            // view. At the ~220 pt/s cruise that's ~5 pt a frame — quantized
+            // motion that suits a pixel sprite whose run cycle steps at 85 ms.
+            TimelineView(.animation(minimumInterval: 1.0 / 40.0)) { ctx in
                 let t = ctx.date.timeIntervalSince(start)
                 let p = pose(at: t, width: w)
                 let revealW: CGFloat = p.reveal.map { max(0, $0 - p.textLeft) } ?? (labelWidth + 4)

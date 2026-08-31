@@ -5,6 +5,11 @@ import SwiftUI
 struct ClaudeSpinner: View {
     var state: ClaudeSession.State = .tool
     var size: CGFloat = 12
+    /// Freeze the glyph clock. Pass true whenever the spinner is mounted but
+    /// not actually visible (e.g. behind an `.opacity(0)`): a ticking
+    /// TimelineView invalidates the whole screen-sized hosting view on every
+    /// step, visible or not.
+    var paused: Bool = false
 
     private static let frames = ["·", "✢", "✳", "∗", "✻", "✽"]
     static let orange = Color(red: 0.85, green: 0.47, blue: 0.34)
@@ -14,7 +19,9 @@ struct ClaudeSpinner: View {
 
     var body: some View {
         let step = blocked ? 1.2 : 0.30
-        TimelineView(.periodic(from: .now, by: step)) { ctx in
+        // .animation-with-interval rather than .periodic solely because
+        // .periodic can't pause; the cadence is the same.
+        TimelineView(.animation(minimumInterval: step, paused: paused)) { ctx in
             let tick = Int(ctx.date.timeIntervalSinceReferenceDate / step)
             Text(blocked ? (tick % 2 == 0 ? "✻" : "✽") : Self.frames[tick % Self.frames.count])
                 .font(.system(size: size, weight: .bold))
@@ -53,7 +60,11 @@ struct SessionsCorner: View {
     var body: some View {
         ZStack {
             if claude.anyActive {
-                ClaudeSpinner(state: claude.headlineState, size: 14)
+                // Paused while the corner is faded out (notch closed, or a
+                // toast on top) — the collapsed pill runs its own spinner
+                // then, and this one would just be ticking invisibly.
+                ClaudeSpinner(state: claude.headlineState, size: 14,
+                              paused: !notch.isOpen || notch.toast != nil)
                     .transition(.scale(scale: 0.4).combined(with: .opacity))
             }
         }
