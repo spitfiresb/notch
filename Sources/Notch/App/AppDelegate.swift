@@ -219,11 +219,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// overlays — the user's previous app stays the "active" application for menu
     /// bar / keyboard purposes — so direct observation is the only reliable signal.)
     private func installSystemOverlayWatcher() {
-        // 0.4 s is deliberately slow — each evaluation is a CGWindowListCopyWindowInfo
-        // IPC round-trip to WindowServer, and the occlusion-state watcher below fires
-        // an extra evaluation the instant an overlay actually starts, so this poll is
-        // mostly a recovery path for the overlay *closing*.
-        let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
+        scheduleOverlayPoll()
+    }
+
+    /// Each evaluation is a CGWindowListCopyWindowInfo IPC round-trip to
+    /// WindowServer, so at rest the poll runs slowly — the occlusion-state
+    /// watcher below (and the trackpad gesture ending) fire an extra
+    /// evaluation the instant an overlay actually starts. While an overlay is
+    /// up, though, the panel is ordered out, occlusion can't announce the
+    /// close, and this poll is the only way back — so only then poll fast.
+    private func scheduleOverlayPoll() {
+        overlayTimer?.invalidate()
+        let interval: TimeInterval = env.notch.isSystemOverlayActive ? 0.4 : 2.0
+        let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.evaluateSystemOverlay() }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -242,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if env.notch.isSystemOverlayActive != active {
             notchLog("[notch.ov] isSystemOverlayActive -> \(active)")
             env.notch.isSystemOverlayActive = active
+            scheduleOverlayPoll()   // fast while an overlay is up, slow at rest
         }
     }
 
@@ -289,7 +298,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installTrackpadMonitor() {
         let monitor = TrackpadGestureMonitor.shared
         monitor.onUpdate = { [weak self] _, _ in self?.trackpadGestureActive = true }
-        monitor.onEnd = { [weak self] in self?.trackpadGestureActive = false }
+        monitor.onEnd = { [weak self] in
+            self?.trackpadGestureActive = false
+            // A gesture-summoned overlay's occlusion event was deliberately
+            // skipped mid-swipe — re-check now instead of waiting for the poll.
+            self?.evaluateSystemOverlay()
+        }
         monitor.start()
     }
 
