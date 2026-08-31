@@ -52,6 +52,7 @@ final class NowPlayingManager: ObservableObject {
 
     private let mr = MediaRemoteBridge()
     private var pollTimer: Timer?
+    private var pollInterval: TimeInterval = 0
     private var usingSpotifyFallback = false
     private var artworkCache: [String: NSImage] = [:]
     private var accentCache: [String: Color] = [:]
@@ -86,10 +87,24 @@ final class NowPlayingManager: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        refresh()
+        schedulePoll()
+    }
+
+    /// The poll is a recovery net — playback-state notifications and the
+    /// post-command refreshes carry the real-time updates. While something is
+    /// playing it runs at 15 s to keep the scrubber honest; paused, nothing
+    /// drifts, so it backs off to 60 s. (In Spotify-fallback mode each poll is
+    /// eight synchronous Apple Events that wake Spotify too, so the paused
+    /// cadence matters for battery, not just for us.)
+    private func schedulePoll() {
+        let interval: TimeInterval = info.isPlaying ? 15 : 60
+        guard interval != pollInterval else { return }
+        pollInterval = interval
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
-        refresh()
     }
 
     func togglePlayPause() {
@@ -170,6 +185,7 @@ final class NowPlayingManager: ObservableObject {
                 self.info = NowPlayingInfo()
             }
             self.syncDisplayState()
+            self.schedulePoll()   // 15 s while playing, 60 s paused
         }
     }
 
