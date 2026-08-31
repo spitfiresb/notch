@@ -155,12 +155,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let notch = env.notch
         if notch.isSystemOverlayActive { return }
         // Feed the cursor to the SwiftUI side (trackedHover) in the panel's
-        // screen-space layout coordinates. Done before any early return so
-        // hover styling inside the panel always tracks the real cursor.
-        if let screen = ScreenMetrics.screen {
+        // screen-space layout coordinates. Done before the drag early-returns
+        // so hover styling inside the panel always tracks the real cursor —
+        // but only while the notch is open: every publish invalidates the
+        // screen-sized hosting view's layout, this runs on *every* mouse move,
+        // and with the notch closed nothing hover-styled is on screen (the
+        // corner spinner and gear are open-only, toasts don't hover). One nil
+        // is flushed on close so probes reset; unchanged points are skipped so
+        // the 0.5 s timer costs nothing under a stationary cursor.
+        if notch.isOpen, let screen = ScreenMetrics.screen {
             let m = NSEvent.mouseLocation
-            env.cursor.point = screen.frame.contains(m)
+            let p = screen.frame.contains(m)
                 ? CGPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y) : nil
+            if env.cursor.point != p { env.cursor.point = p }
+        } else if env.cursor.point != nil {
+            env.cursor.point = nil
         }
         // Mid-drag the blob is wherever the cursor is by definition — hover
         // logic would only fight the drag controller — and while it's still
@@ -219,11 +228,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// overlays — the user's previous app stays the "active" application for menu
     /// bar / keyboard purposes — so direct observation is the only reliable signal.)
     private func installSystemOverlayWatcher() {
-        // 0.4 s is deliberately slow — each evaluation is a CGWindowListCopyWindowInfo
-        // IPC round-trip to WindowServer, and the occlusion-state watcher below fires
-        // an extra evaluation the instant an overlay actually starts, so this poll is
-        // mostly a recovery path for the overlay *closing*.
-        let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
+        scheduleOverlayPoll()
+    }
+
+    /// Each evaluation is a CGWindowListCopyWindowInfo IPC round-trip to
+    /// WindowServer, so at rest the poll runs slowly — the occlusion-state
+    /// watcher below (and the trackpad gesture ending) fire an extra
+    /// evaluation the instant an overlay actually starts. While an overlay is
+    /// up, though, the panel is ordered out, occlusion can't announce the
+    /// close, and this poll is the only way back — so only then poll fast.
+    private func scheduleOverlayPoll() {
+        overlayTimer?.invalidate()
+        let interval: TimeInterval = env.notch.isSystemOverlayActive ? 0.4 : 2.0
+        let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.evaluateSystemOverlay() }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -242,6 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if env.notch.isSystemOverlayActive != active {
             notchLog("[notch.ov] isSystemOverlayActive -> \(active)")
             env.notch.isSystemOverlayActive = active
+            scheduleOverlayPoll()   // fast while an overlay is up, slow at rest
         }
     }
 
@@ -289,7 +307,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installTrackpadMonitor() {
         let monitor = TrackpadGestureMonitor.shared
         monitor.onUpdate = { [weak self] _, _ in self?.trackpadGestureActive = true }
-        monitor.onEnd = { [weak self] in self?.trackpadGestureActive = false }
+        monitor.onEnd = { [weak self] in
+            self?.trackpadGestureActive = false
+            // A gesture-summoned overlay's occlusion event was deliberately
+            // skipped mid-swipe — re-check now instead of waiting for the poll.
+            self?.evaluateSystemOverlay()
+        }
         monitor.start()
     }
 

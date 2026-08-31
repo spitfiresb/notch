@@ -40,7 +40,7 @@ final class AudioMeter: ObservableObject {
     // Atomically-read snapshot of the latest band magnitudes the IO proc has computed.
     private let snapshot = AudioMeterSnapshot()
 
-    // 60 Hz pull from main to read the snapshot and update @Published bars.
+    // 30 Hz pull from main to read the snapshot and update @Published bars.
     private var pollTimer: Timer?
 
     func start() {
@@ -155,7 +155,7 @@ final class AudioMeter: ObservableObject {
 
     private func startPolling() {
         pollTimer?.invalidate()
-        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -273,8 +273,12 @@ final class AudioMeter: ObservableObject {
     // enough that the bar visibly travels through the middle values instead of
     // teleporting between floor and peak. The dB-window + floor changes carry
     // the amplitude swing; the envelope's only job is to draw a smooth path.
-    private static let attackPerBand:  [CGFloat] = [0.42, 0.48, 0.54, 0.60, 0.66, 0.72]
-    private static let releasePerBand: [CGFloat] = [0.18, 0.22, 0.26, 0.30, 0.34, 0.38]
+    // Tuned at 60 Hz as attack [0.42, 0.48, 0.54, 0.60, 0.66, 0.72] and
+    // release [0.18, 0.22, 0.26, 0.30, 0.34, 0.38]; the poll now runs at
+    // 30 Hz, so each value is converted as a30 = 1-(1-a60)^2 — one 30 Hz step
+    // covers exactly what two 60 Hz steps did, same envelope time constants.
+    private static let attackPerBand:  [CGFloat] = [0.6636, 0.7296, 0.7884, 0.8400, 0.8844, 0.9216]
+    private static let releasePerBand: [CGFloat] = [0.3276, 0.3916, 0.4524, 0.5100, 0.5644, 0.6156]
 
     private func follow(env: CGFloat, target: CGFloat, band: Int) -> CGFloat {
         let a = target > env ? Self.attackPerBand[band] : Self.releasePerBand[band]

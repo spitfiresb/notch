@@ -56,7 +56,9 @@ struct MarqueeText: View {
         let travel = textWidth + gap
         let scrollDuration = Double(travel / speed)
         let cycle = hold + scrollDuration
-        return TimelineView(.animation) { ctx in
+        // 30 fps is already sub-point motion at 28 pt/s; uncapped .animation
+        // would redraw at display refresh (120 Hz on ProMotion) for nothing.
+        return TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
             let t = ctx.date.timeIntervalSince(epoch).truncatingRemainder(dividingBy: cycle)
             let progress = max(0, t - hold) / scrollDuration
             let offset = -CGFloat(progress) * travel
