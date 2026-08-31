@@ -155,12 +155,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let notch = env.notch
         if notch.isSystemOverlayActive { return }
         // Feed the cursor to the SwiftUI side (trackedHover) in the panel's
-        // screen-space layout coordinates. Done before any early return so
-        // hover styling inside the panel always tracks the real cursor.
-        if let screen = ScreenMetrics.screen {
+        // screen-space layout coordinates. Done before the drag early-returns
+        // so hover styling inside the panel always tracks the real cursor —
+        // but only while the notch is open: every publish invalidates the
+        // screen-sized hosting view's layout, this runs on *every* mouse move,
+        // and with the notch closed nothing hover-styled is on screen (the
+        // corner spinner and gear are open-only, toasts don't hover). One nil
+        // is flushed on close so probes reset; unchanged points are skipped so
+        // the 0.5 s timer costs nothing under a stationary cursor.
+        if notch.isOpen, let screen = ScreenMetrics.screen {
             let m = NSEvent.mouseLocation
-            env.cursor.point = screen.frame.contains(m)
+            let p = screen.frame.contains(m)
                 ? CGPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y) : nil
+            if env.cursor.point != p { env.cursor.point = p }
+        } else if env.cursor.point != nil {
+            env.cursor.point = nil
         }
         // Mid-drag the blob is wherever the cursor is by definition — hover
         // logic would only fight the drag controller — and while it's still
