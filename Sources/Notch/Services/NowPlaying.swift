@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Combine
 import CoreImage
 import SwiftUI
@@ -388,13 +389,38 @@ enum SpotifyBridge {
         NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == bundleID }
     }
 
+    /// Compiled scripts, one per distinct body. `NSAppleScript` compilation
+    /// routes the source through XProtect (a from-scratch YARA rule compile,
+    /// ~25 ms of main-thread CPU) on *every* compile — so never compile the
+    /// same text twice. NSAppleScript isn't thread-safe and every caller is
+    /// main-thread already (Apple Events + TCC prompts require it), which
+    /// `assumeIsolated` in `run` asserts.
+    @MainActor private static var compiled: [String: NSAppleScript] = [:]
+
     @discardableResult
     private static func run(_ body: String) -> String? {
-        var error: NSDictionary?
-        let script = NSAppleScript(source: "tell application \"Spotify\"\n\(body)\nend tell")
-        let result = script?.executeAndReturnError(&error)
-        if let error { NSLog("[Notch] Spotify AppleScript error: \(error)"); return nil }
-        return result?.stringValue
+        MainActor.assumeIsolated {
+            let source = "tell application \"Spotify\"\n\(body)\nend tell"
+            let script: NSAppleScript
+            if let hit = compiled[source] {
+                script = hit
+            } else {
+                guard let fresh = NSAppleScript(source: source) else { return nil }
+                compiled[source] = fresh
+                script = fresh
+            }
+            var error: NSDictionary?
+            let result = script.executeAndReturnError(&error)
+            if let error { NSLog("[Notch] Spotify AppleScript error: \(error)"); return nil }
+            return result.stringValue
+        }
+    }
+
+    /// True when an Apple Event round-trip to Spotify succeeds — i.e. the
+    /// Automation permission is granted. Used by the onboarding poll, so it
+    /// must go through the compiled-script cache like everything else.
+    static func probeConnection() -> Bool {
+        run("return name") != nil
     }
 
     /// Fires the macOS Automation permission prompt for Spotify (used during onboarding).
@@ -408,9 +434,35 @@ enum SpotifyBridge {
         _ = run(verb)
     }
 
+    /// Seeking can't go through `run` — interpolating the position would make
+    /// every seek a brand-new script body, and each one would pay the XProtect
+    /// compile scan. A handler compiled once takes the position as an argument.
+    @MainActor private static let seekScript = NSAppleScript(source: """
+        on seekTo(pos)
+            tell application "Spotify" to set player position to pos
+        end seekTo
+        """)
+
     static func seek(to seconds: Double) {
         guard isRunning else { return }
-        _ = run("set player position to \(seconds)")
+        MainActor.assumeIsolated {
+            // The standard "call a handler" event: ascr/psbr with the
+            // lowercased handler name in keyASSubroutineName.
+            let event = NSAppleEventDescriptor(
+                eventClass: AEEventClass(kASAppleScriptSuite),
+                eventID: AEEventID(kASSubroutineEvent),
+                targetDescriptor: .null(),
+                returnID: AEReturnID(kAutoGenerateReturnID),
+                transactionID: AETransactionID(kAnyTransactionID))
+            event.setDescriptor(NSAppleEventDescriptor(string: "seekto"),
+                                forKeyword: AEKeyword(keyASSubroutineName))
+            let params = NSAppleEventDescriptor.list()
+            params.insert(NSAppleEventDescriptor(double: seconds), at: 1)
+            event.setDescriptor(params, forKeyword: AEKeyword(keyDirectObject))
+            var error: NSDictionary?
+            _ = seekScript?.executeAppleEvent(event, error: &error)
+            if let error { NSLog("[Notch] Spotify seek error: \(error)") }
+        }
     }
 
     /// True for a podcast episode URI ("spotify:episode:xxxx").

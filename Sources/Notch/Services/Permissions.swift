@@ -53,11 +53,11 @@ enum Permissions {
     }
 
     /// True once Spotify is running *and* an Apple Event to it succeeds (i.e. permission granted).
+    /// Goes through SpotifyBridge so the onboarding poll reuses the compiled
+    /// script instead of paying an XProtect compile scan every second.
     static var spotifyControllable: Bool {
         guard SpotifyBridge.isRunning else { return false }
-        var error: NSDictionary?
-        _ = NSAppleScript(source: "tell application \"Spotify\" to return name")?.executeAndReturnError(&error)
-        return error == nil
+        return SpotifyBridge.probeConnection()
     }
 
     static func requestSpotifyAutomation() {
