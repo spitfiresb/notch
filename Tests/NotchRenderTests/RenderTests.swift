@@ -135,6 +135,12 @@ final class RenderTests: XCTestCase {
                 if !podcast {
                     env.notch.dock = dock; env.notch.isOpen = false
                     writeDocked(env, dock: dock, name: "\(dock)-collapsed")
+                    env.notch.isHoverPreview = true
+                    let crop = windowCrop(for: dock)
+                    writeHosted(root(env).frame(width: screenSize.width, height: screenSize.height)
+                        .offset(x: -crop.minX, y: -crop.minY)
+                        .frame(width: crop.width, height: crop.height, alignment: .topLeading)
+                        .clipped(), size: crop.size, name: "\(dock)-hover-preview")
                 }
                 env.notch.dock = dock; env.notch.isOpen = true
                 writeDocked(env, dock: dock, name: "\(dock)-open-\(kind)")

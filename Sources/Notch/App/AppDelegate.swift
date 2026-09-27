@@ -68,10 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // hover states (and the tracked cursor) live while the cursor is on it.
         panel.onMouseActivity = { [weak self] in self?.evaluateHover() }
 
-        // Let the menu bar under the collapsed pill stay clickable; capture clicks when open.
+        // Capture clicks for the preview controls as well as the expanded panel.
         env.notch.$isOpen
+            .combineLatest(env.notch.$isHoverPreview)
+            .map { $0 || $1 }
             .removeDuplicates()
-            .sink { [weak panel] open in panel?.ignoresMouseEvents = !open }
+            .sink { [weak panel] interactive in panel?.ignoresMouseEvents = !interactive }
             .store(in: &cancellables)
 
         // Hot-corner / Mission Control: when Dock.app takes the screen, pull the panel
@@ -157,13 +159,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Feed the cursor to the SwiftUI side (trackedHover) in the panel's
         // screen-space layout coordinates. Done before the drag early-returns
         // so hover styling inside the panel always tracks the real cursor —
-        // but only while the notch is open: every publish invalidates the
+        // but only while the notch is open or previewing: every publish invalidates the
         // screen-sized hosting view's layout, this runs on *every* mouse move,
-        // and with the notch closed nothing hover-styled is on screen (the
+        // and with the notch idle nothing hover-styled is on screen (the
         // corner spinner and gear are open-only, toasts don't hover). One nil
         // is flushed on close so probes reset; unchanged points are skipped so
         // the 0.5 s timer costs nothing under a stationary cursor.
-        if notch.isOpen, let screen = ScreenMetrics.screen {
+        if notch.isOpen || notch.isHoverPreview, let screen = ScreenMetrics.screen {
             let m = NSEvent.mouseLocation
             let p = screen.frame.contains(m)
                 ? CGPoint(x: m.x - screen.frame.minX, y: screen.frame.maxY - m.y) : nil
@@ -201,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if blobRect.contains(mouse) || hoverGraceRect != nil {
             notch.cancelScheduledClose()
             if !notch.isOpen {
-                notch.open()
+                if !notch.isHoverPreview { notch.isHoverPreview = true }
             } else if notch.sessionsPanelExpanded,
                       mouse.y > blobRect.maxY - SessionsCorner.stripTopInset(for: notch.dock) {
                 // Cursor moved back up into the regular tab area (above the
@@ -216,8 +218,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else if notch.toast != nil && !notch.isPinnedOpen {
                 notch.dismissToast()   // banner's time is up — reveal the tabs underneath
             }
-        } else if notch.isOpen && !notch.isPinnedOpen {
-            notch.close()
+        } else {
+            if notch.isHoverPreview { notch.isHoverPreview = false }
+            if notch.isOpen && !notch.isPinnedOpen { notch.close() }
         }
     }
 

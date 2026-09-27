@@ -156,7 +156,10 @@ final class NotchState: ObservableObject {
         }
     }
 
-    @Published var isOpen = false
+    @Published var isOpen = false {
+        didSet { if isOpen { isHoverPreview = false } }
+    }
+    @Published var isHoverPreview = false
     @Published var tab: Tab = .music {
         didSet { if tab != .music { musicPanelExpanded = false } }
     }
@@ -168,7 +171,11 @@ final class NotchState: ObservableObject {
     /// Blob size while open. The sessions panel is only as tall as its rows
     /// (capped at the music-panel height, the window's fixed size).
     func openBlobSize(sessionRows: Int) -> CGSize {
-        guard isOpen else { return ScreenMetrics.collapsedSize(for: dock) }
+        guard isOpen else {
+            let size = ScreenMetrics.collapsedSize(for: dock)
+            let scale: CGFloat = isHoverPreview ? 1.08 : 1
+            return CGSize(width: size.width * scale, height: size.height * scale)
+        }
         let expanded = ScreenMetrics.expandedSize(for: dock)
         let biggest = ScreenMetrics.windowSize(for: dock)
         if tab == .music && musicPanelExpanded { return biggest }
@@ -230,6 +237,7 @@ final class NotchState: ObservableObject {
         pinnedUntil = nil
         toast = nil
         isOpen = false
+        isHoverPreview = false
         musicPanelExpanded = false
         sessionsPanelExpanded = false
         scheduleTabRevert()

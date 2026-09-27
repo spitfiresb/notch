@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Six bars whose heights track either real audio (via `AudioMeter`'s six band levels,
 /// low frequencies first) or, when no tap signal is available, a continuous sine wiggle.
-/// When paused, the bars freeze at a low resting height.
+/// On pause, the same capsules ease down to a low resting height.
 struct DancingBars: View {
     var color: Color = .white
     var isPlaying: Bool = true
@@ -18,36 +18,25 @@ struct DancingBars: View {
     private static let count = AudioMeter.bandCount
 
     var body: some View {
-        if !isPlaying {
-            HStack(alignment: .center, spacing: spacing) {
-                ForEach(0..<Self.count, id: \.self) { _ in
-                    bar(height: Self.restHeight)
-                }
+        // Keep one stable set of capsules across playback and meter changes.
+        // The fallback clock sleeps while paused or while real audio drives us.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                paused: !isPlaying || meter.isRunning)) { context in
+            let heights = (0..<Self.count).map { i in
+                !isPlaying ? Self.restHeight : meter.isRunning ? meter.bars[i]
+                    : scale(context.date.timeIntervalSinceReferenceDate, phase: Double(i) * 1.1)
             }
-        } else if meter.isRunning {
-            // Real audio — re-renders every time the meter publishes new levels.
-            // The envelope follower in AudioMeter handles the shape of the motion
-            // (per-band attack/release); this short easeOut just interpolates
-            // between successive publishes so the bar visibly travels through
-            // middle values at frame rate instead of stepping in discrete jumps.
             HStack(alignment: .center, spacing: spacing) {
                 ForEach(0..<Self.count, id: \.self) { i in
-                    bar(height: meter.bars[i])
+                    bar(height: heights[i])
                 }
             }
-            .animation(.easeOut(duration: 0.07), value: meter.bars)
-        } else {
-            // Fallback: synthesized wiggle so playing-without-permission still feels alive.
-            // Capped at 30 fps — `.animation` uncapped runs at display refresh
-            // (120 Hz on ProMotion) for a wiggle nobody can see that fast.
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                HStack(alignment: .center, spacing: spacing) {
-                    ForEach(0..<Self.count, id: \.self) { i in
-                        bar(height: scale(t, phase: Double(i) * 1.1))
-                    }
-                }
-            }
+            // Once paused, meter publishes no longer change these targets or
+            // interrupt the settle. SwiftUI starts from the presented heights,
+            // including when playback is toggled again midway through a settle.
+            .animation(isPlaying
+                       ? (meter.isRunning ? .easeOut(duration: 0.07) : nil)
+                       : .easeOut(duration: 0.55), value: heights)
         }
     }
 

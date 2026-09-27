@@ -30,7 +30,9 @@ Music · audio-reactive bars · screenshots · your Spotify library · **live Cl
 <tr>
 <td>
 
-**Expanded**: hover and the pill morphs into a player with artwork, title, a draggable scrubber, and transport controls. The album art and bars *travel* between the two layouts (`matchedGeometryEffect`), so opening feels like one continuous shape-shift rather than a swap.
+**Hover preview**: hovering grows the pill by 8% and reveals previous, play/pause, and next controls. Click the pill’s background to open the full panel.
+
+**Expanded**: click and the pill morphs into a player with artwork, title, a draggable scrubber, and transport controls. The album art and bars *travel* between the two layouts (`matchedGeometryEffect`), so opening feels like one continuous shape-shift rather than a swap.
 
 </td>
 <td>
@@ -126,7 +128,7 @@ Direct Terminal.app sessions retain tab focus; VS Code sessions focus their proj
 
 ### Lives on any edge
 
-The top of the screen is only the default. Click-hold the open notch and drag: it shrinks into a black droplet under the cursor while grey outlined pills appear on every edge it can go to — top, left, and right — with the nearest one lit, showing exactly where it will land. Let go and the droplet glides into that outline and becomes the notch: one object the whole way, no swap or fade. Side-docked, the collapsed notch is a slim upright pill — art at the head, the small audio meter turned to run lengthwise, the Claude spinner at the foot. Hover it and it opens into exactly the same panel as the top notch, just grown out sideways from the edge instead of down from the top: same tabs, same transport, same playlist and sessions fold-outs. The choice persists across launches.
+The top of the screen is only the default. Click-hold the open notch and drag: it shrinks into a black droplet under the cursor while grey outlined pills appear on every edge it can go to — top, left, and right — with the nearest one lit, showing exactly where it will land. Let go and the droplet glides into that outline and becomes the notch: one object the whole way, no swap or fade. Side-docked, the collapsed notch is a slim upright pill — art at the head, the small audio meter turned to run lengthwise, the Claude spinner at the foot. Hover for the compact playback controls, then click the pill’s background to open exactly the same panel as the top notch, just grown out sideways from the edge instead of down from the top: same tabs, same transport, same playlist and sessions fold-outs. The choice persists across launches.
 
 Layouts for every dock and state can be rendered offscreen with `swift test` (PNGs land in `.build/renders/`), so the side-dock design was checked without a cursor in the way.
 

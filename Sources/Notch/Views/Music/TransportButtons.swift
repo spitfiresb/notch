@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Side transport (⏮ / ⏭) — slightly grey by default, brightens & scales up on hover.
-/// Hover and release use springs (gentle bounce / pop), press-down is a snappy ease.
+/// Shared timing: 100 ms press, 280 ms release, 200 ms hover.
 struct TransportButton: View {
-    enum Glyph { case symbol(String), text(String) }
+    enum Glyph { case symbol(String), text(String), playPause(Bool) }
     let glyph: Glyph
     let size: CGFloat
     let enabled: Bool
@@ -30,6 +30,10 @@ struct TransportButton: View {
     @ViewBuilder private var label: some View {
         switch glyph {
         case .symbol(let name): Image(systemName: name)
+        case .playPause(let isPlaying):
+            PlayPauseGlyph(progress: isPlaying ? 1 : 0)
+                .frame(width: size, height: size)
+                .animation(.easeInOut(duration: 0.28), value: isPlaying)
         case .text(let s): Text(s).monospacedDigit().lineLimit(1).fixedSize()
         }
     }
@@ -41,12 +45,12 @@ struct TransportButton: View {
             .frame(width: width, height: size + 8)
             .contentShape(Rectangle())
             .scaleEffect(scale)
-            // press DOWN: snappy ease; press UP: spring with overshoot for the iOS-style "pop".
+            // All transport controls use the same press and release duration.
             .animation(pressed
-                       ? .easeOut(duration: 0.12)
-                       : .spring(response: 0.68, dampingFraction: 0.5),
+                       ? .easeOut(duration: 0.10)
+                       : .easeOut(duration: 0.28),
                        value: pressed)
-            .animation(.spring(response: 0.32, dampingFraction: 0.62), value: hovering)
+            .animation(.easeInOut(duration: 0.20), value: hovering)
             .opacity(enabled ? 1 : 0.3)
             .trackedHover { if enabled { hovering = $0 } }
             .gesture(
@@ -69,75 +73,51 @@ struct TransportButton: View {
     }
 }
 
-/// Play/pause built from a custom press gesture (no `Button` — avoids macOS's default
-/// pressed-state grey tint that was layering over our own animation). Behaviour:
-///   • hover → button scales up ~1.1
-///   • press → snaps down to 0.82 in ~50ms (almost instant)
-///   • release → action fires, the icon cross-fade kicks in, and the scale grows back
-///               to its current target (1.0 or 1.1 if still hovering) — all in sync.
+/// Both the compact and expanded players share the same press/release motion.
 struct PlayPauseButton: View {
     let isPlaying: Bool
     let enabled: Bool
     let action: () -> Void
 
-    /// What's actually drawn; only updated on release so the icon swap is paired
-    /// with the grow-back, not the depress.
-    @State private var renderIsPlaying = false
-    @State private var hovering = false
-    @State private var pressed = false
-
-    private let size: CGFloat = 30
-
     var body: some View {
-        // One simple cross-fade — the icons don't scale individually (that was reading
-        // as a second motion on top of the button's own scale). Pure opacity swap.
-        ZStack {
-            Image(systemName: "play.fill").opacity(renderIsPlaying ? 0 : 1)
-            Image(systemName: "pause.fill").opacity(renderIsPlaying ? 1 : 0)
-        }
-        // Grey at rest, brightens on hover — matches the side transport buttons.
-        .foregroundStyle(.white.opacity(hovering ? 1 : 0.55))
-        .font(.system(size: 17, weight: .medium))
-        .animation(.easeOut(duration: 0.32), value: renderIsPlaying)
-        .frame(width: size, height: size)
-        .contentShape(Rectangle())
-        .scaleEffect(scale)
-        // Snappy press-down, bouncy spring release — Apple-style click pop.
-        .animation(pressed
-                   ? .easeOut(duration: 0.12)
-                   : .spring(response: 0.72, dampingFraction: 0.5),
-                   value: pressed)
-        .animation(.spring(response: 0.32, dampingFraction: 0.62), value: hovering)
-        .opacity(enabled ? 1 : 0.3)
-        .trackedHover { if enabled { hovering = $0 } }
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                .onChanged { _ in if enabled && !pressed { pressed = true } }
-                .onEnded { v in
-                    pressed = false
-                    guard enabled else { return }
-                    let bounds = CGRect(x: 0, y: 0, width: size, height: size)
-                    if bounds.contains(v.location) {
-                        action()
-                        // Flip the render state in the SAME runloop tick as `pressed=false`
-                        // so the icon cross-fade starts the instant the button starts
-                        // growing back — no hesitation while we wait for `.onChange` to
-                        // fire after the parent's re-render.
-                        renderIsPlaying.toggle()
-                    }
-                }
-        )
-        .onAppear { renderIsPlaying = isPlaying }
-        .onChange(of: isPlaying) { _, new in
-            // Catch external changes (poll) — local toggle above already synced for taps.
-            if renderIsPlaying != new { renderIsPlaying = new }
-        }
+        TransportButton(glyph: .playPause(isPlaying), size: 17, enabled: enabled, action: action)
+            .frame(width: 30, height: 30)
+            .accessibilityLabel(isPlaying ? "Pause" : "Play")
+    }
+}
+
+/// Two adjoining pieces of one triangle morph into two pause bars. No layered
+/// symbols or fading copies, so there is no old glyph left behind during a swap.
+private struct PlayPauseGlyph: Shape {
+    var progress: CGFloat
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
     }
 
-    private var scale: CGFloat {
-        guard enabled else { return 1 }
-        if pressed { return 0.82 }
-        if hovering { return 1.15 }
-        return 1.0
+    func path(in rect: CGRect) -> Path {
+        let play: [[CGPoint]] = [
+            [CGPoint(x: 0.18, y: 0.08), CGPoint(x: 0.48, y: 0.26),
+             CGPoint(x: 0.48, y: 0.74), CGPoint(x: 0.18, y: 0.92)],
+            [CGPoint(x: 0.48, y: 0.26), CGPoint(x: 0.88, y: 0.5),
+             CGPoint(x: 0.88, y: 0.5), CGPoint(x: 0.48, y: 0.74)]
+        ]
+        let pause: [[CGPoint]] = [
+            [CGPoint(x: 0.18, y: 0.08), CGPoint(x: 0.40, y: 0.08),
+             CGPoint(x: 0.40, y: 0.92), CGPoint(x: 0.18, y: 0.92)],
+            [CGPoint(x: 0.60, y: 0.08), CGPoint(x: 0.82, y: 0.08),
+             CGPoint(x: 0.82, y: 0.92), CGPoint(x: 0.60, y: 0.92)]
+        ]
+        var path = Path()
+        for piece in 0..<2 {
+            for vertex in 0..<4 {
+                let a = play[piece][vertex], b = pause[piece][vertex]
+                let point = CGPoint(x: rect.minX + (a.x + (b.x - a.x) * progress) * rect.width,
+                                    y: rect.minY + (a.y + (b.y - a.y) * progress) * rect.height)
+                if vertex == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            path.closeSubpath()
+        }
+        return path
     }
 }

@@ -145,7 +145,18 @@ struct NotchRootView: View {
                 .clipShape(blobShape)
         }
         .frame(width: blobSize.width, height: blobSize.height)
-        .gesture(dockDragGesture)
+        .contentShape(blobShape)
+        .gesture(dockDragGesture.exclusively(before:
+            DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .onEnded { value in
+                    guard !notch.isOpen, notch.toast == nil,
+                          !dragging, !notch.isDockLanding,
+                          abs(value.translation.width) < 12,
+                          abs(value.translation.height) < 12,
+                          CGRect(origin: .zero, size: blobSize).contains(value.location) else { return }
+                    notch.open()
+                }
+        ))
         // Hot-corner overlays (Mission Control / App Exposé): retract the blob
         // past its docked edge — the docked viewport clips it, so it reads as
         // sliding into the bezel. Visible only because the overlay CGS space
@@ -159,13 +170,14 @@ struct NotchRootView: View {
                    ? .easeIn(duration: 0.26)
                    : .spring(response: 0.40, dampingFraction: 1.0),
                    value: notch.isSystemOverlayActive)
+        .animation(.easeOut(duration: 0.18), value: notch.isHoverPreview)
         .animation(transitionAnim, value: notch.isOpen)
         .animation(Self.openAnim, value: notch.tab)
         .animation(Self.openAnim, value: notch.musicPanelExpanded)
         .animation(Self.openAnim, value: notch.sessionsPanelExpanded)
         .animation(Self.openAnim, value: agents.activeSessions.count)
         .animation(transitionAnim, value: notch.toast)
-        // Hover open/close is driven by AppDelegate's cursor watcher.
+        // Hover preview / close is driven by AppDelegate's cursor watcher.
     }
 
     @ViewBuilder private var dockShadow: some View {
@@ -386,6 +398,11 @@ private struct CollapsedPeek: View {
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
+            if notch.isHoverPreview {
+                previewControls
+                    .transition(.opacity)
+                Spacer(minLength: 0)
+            }
             DancingBars(color: music.displayAccent,
                         isPlaying: music.info.isPlaying)
                 .frame(width: 20, height: 14)
@@ -405,6 +422,20 @@ private struct CollapsedPeek: View {
         .padding(.horizontal, 22)
     }
 
+    private var previewControls: some View {
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 3)) : AnyLayout(HStackLayout(spacing: 6))
+        return layout {
+            TransportButton(symbol: "backward.fill", size: 13, enabled: showing) { music.previous() }
+                .accessibilityLabel("Previous track")
+            TransportButton(glyph: .playPause(music.info.isPlaying), size: 13, enabled: showing) {
+                music.togglePlayPause()
+            }
+            .accessibilityLabel(music.info.isPlaying ? "Pause" : "Play")
+            TransportButton(symbol: "forward.fill", size: 13, enabled: showing) { music.next() }
+                .accessibilityLabel("Next track")
+        }
+    }
+
     /// Upright pill, top-to-bottom: art at the head, a meter the same size as
     /// the top pill's turned to run along the length, and the Claude spinner
     /// at the foot when a session is working.
@@ -415,6 +446,11 @@ private struct CollapsedPeek: View {
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
+            if notch.isHoverPreview {
+                previewControls
+                    .transition(.opacity)
+                Spacer(minLength: 0)
+            }
             LengthwiseBars(color: music.displayAccent, isPlaying: music.info.isPlaying,
                            reach: 14, barWidth: 1.8, spacing: 1.3, fromRight: notch.dock == .right)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)
