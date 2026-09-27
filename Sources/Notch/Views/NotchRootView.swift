@@ -426,12 +426,15 @@ private struct CollapsedPeek: View {
         let layout = vertical ? AnyLayout(VStackLayout(spacing: 3)) : AnyLayout(HStackLayout(spacing: 6))
         return layout {
             TransportButton(symbol: "backward.fill", size: 13, enabled: showing) { music.previous() }
+                .matchedGeometryEffect(id: "chromePrevious", in: namespace)
                 .accessibilityLabel("Previous track")
             TransportButton(glyph: .playPause(music.info.isPlaying), size: 13, enabled: showing) {
                 music.togglePlayPause()
             }
+            .matchedGeometryEffect(id: "chromePlayPause", in: namespace)
             .accessibilityLabel(music.info.isPlaying ? "Pause" : "Play")
             TransportButton(symbol: "forward.fill", size: 13, enabled: showing) { music.next() }
+                .matchedGeometryEffect(id: "chromeNext", in: namespace)
                 .accessibilityLabel("Next track")
         }
     }

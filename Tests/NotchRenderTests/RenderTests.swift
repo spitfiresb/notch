@@ -81,7 +81,7 @@ final class RenderTests: XCTestCase {
 
     /// ImageRenderer omits AppKit controls, scroll views and live TimelineView
     /// content. Use an offscreen host for the session list and settings instead.
-    private func writeHosted(_ view: some View, size: CGSize, name: String) {
+    private func writeHosted(_ view: some View, size: CGSize, name: String, update: (() -> Void)? = nil) {
         let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
         let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: size.width, height: size.height),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -91,6 +91,10 @@ final class RenderTests: XCTestCase {
         defer { window.close() }
         host.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        if let update {
+            update()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.16))
+        }
         guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
             return XCTFail("no hosted bitmap for \(name)")
         }
@@ -152,6 +156,42 @@ final class RenderTests: XCTestCase {
         env.notch.tab = .screenshots
         env.notch.dock = .left; env.notch.isOpen = true
         writeDocked(env, dock: .left, name: "left-open-screenshots")
+    }
+
+    func testPreviewExpansionTransitions() {
+        let storedDock = NotchDock.stored
+        defer { storedDock.store() }
+        for dock in NotchDock.allCases {
+            for podcast in [false, true] {
+                let env = Env()
+                seed(env, podcast: podcast)
+                env.notch.dock = dock
+                env.notch.isHoverPreview = true
+                let crop = windowCrop(for: dock)
+                let view = root(env).frame(width: screenSize.width, height: screenSize.height)
+                    .offset(x: -crop.minX, y: -crop.minY)
+                    .frame(width: crop.width, height: crop.height, alignment: .topLeading)
+                    .clipped()
+                let kind = podcast ? "podcast" : "song"
+                writeHosted(view, size: crop.size, name: "\(dock)-expanding-\(kind)") {
+                    env.notch.open()
+                }
+                XCTAssertFalse(env.notch.isHoverPreview)
+                XCTAssertEqual(env.notch.openBlobSize(sessionRows: 0), ScreenMetrics.expandedSize(for: dock))
+                if !podcast {
+                    writeHosted(view, size: crop.size, name: "\(dock)-playlist-expanding") {
+                        env.notch.musicPanelExpanded = true
+                    }
+                    XCTAssertEqual(env.notch.openBlobSize(sessionRows: 0), ScreenMetrics.windowSize(for: dock))
+                }
+                writeHosted(view, size: crop.size, name: "\(dock)-collapsing-\(kind)") {
+                    env.notch.close()
+                }
+                XCTAssertFalse(env.notch.isHoverPreview)
+                XCTAssertFalse(env.notch.musicPanelExpanded)
+                XCTAssertEqual(env.notch.openBlobSize(sessionRows: 0), ScreenMetrics.collapsedSize(for: dock))
+            }
+        }
     }
 
     func testSideToast() {
