@@ -1,8 +1,7 @@
 import SwiftUI
 
 struct MusicTabView: View {
-    /// Shared with `CollapsedPeek` so `matchedGeometryEffect` can morph the
-    /// artwork and bars between the peek's small layout and our larger one.
+    /// Shared with the peek and the root's persistent artwork image.
     let namespace: Namespace.ID
     @EnvironmentObject private var music: NowPlayingManager
     @EnvironmentObject private var spotify: SpotifyLibrary
@@ -138,14 +137,11 @@ struct MusicTabView: View {
         info.hasContent && (spotify.state != .connected || info.spotifyTrackID != nil)
     }
 
-    /// Plain content for the artwork slot — no `.id`/`.transition` here because
-    /// that pair runs its own opacity fade when this view is inserted, which
-    /// conflicts with the matched-geometry morph during the open transition.
-    /// Also no `.aspectRatio` — album art is square in practice and the layout
-    /// constraint fought with matched-geometry's frame interpolation.
+    /// The root draws the real cover using this slot's geometry, so opening
+    /// the tab does not insert a second image or fade the cover in again.
     @ViewBuilder private var artwork: some View {
-        if let image = music.displayArt {
-            Image(nsImage: image).resizable()
+        if music.displayArt != nil {
+            Color.clear
         } else {
             ZStack {
                 Color.white.opacity(0.08)

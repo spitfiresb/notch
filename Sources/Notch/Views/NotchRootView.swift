@@ -6,11 +6,10 @@ import SwiftUI
 struct NotchRootView: View {
     @EnvironmentObject private var notch: NotchState
     @EnvironmentObject private var agents: AgentSessionStore
+    @EnvironmentObject private var music: NowPlayingManager
 
-    /// Shared namespace for `matchedGeometryEffect` on the album art and dancing
-    /// bars — lets SwiftUI morph those elements between the peek's small layout
-    /// and the music tab's larger layout instead of cross-fading two copies
-    /// (which read as a teleport).
+    /// Artwork slots supply geometry for a single persistent image. Keeping the
+    /// image outside the changing peek/tab branches avoids a resize cross-fade.
     @Namespace private var chromeNS
 
     // Open is a touch slower than close so the content has time to register on the
@@ -202,16 +201,10 @@ struct NotchRootView: View {
         }
     }
 
-    /// `if/else` between the peek and the tab (instead of opacity-toggling both)
-    /// is what lets `matchedGeometryEffect` morph the album art and bars between
-    /// their two layouts during the open/close sweep — when both views were
-    /// always in the tree, matched geometry had nothing to interpolate between
-    /// and we got the cross-fade teleport.
+    /// The peek and tab supply matching layout slots; the artwork itself stays
+    /// alive above both branches and below the blob's animated clip.
     @ViewBuilder private var content: some View {
         ZStack {
-            // The `.animation(_:value:)` here is what drives the matched-geometry
-            // morph during the open/close sweep — the parent-level animation
-            // didn't always propagate into the if/else view-tree change.
             Group {
                 if notch.toast == nil {
                     if notch.isOpen {
@@ -281,6 +274,23 @@ struct NotchRootView: View {
                 .animation(.easeOut(duration: 0.22), value: notch.isOpen)
                 .animation(.easeOut(duration: 0.18), value: notch.toast)
         }
+        .overlay {
+            if notch.toast == nil,
+               (!notch.isOpen || notch.tab == .music),
+               let image = music.displayArt {
+                Image(nsImage: image)
+                    .resizable()
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: !notch.isOpen && dock != .top && !dragging ? 3 : 0,
+                        style: .continuous))
+                    // No fixed frame here: the matched slot proposes the
+                    // interpolated size directly to the resizable image.
+                    .matchedGeometryEffect(id: "chromeArt", in: chromeNS, isSource: false)
+                    .opacity(notch.isOpen || music.info.hasContent ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 
     @ViewBuilder private var tabContent: some View {
@@ -343,11 +353,8 @@ private struct SettingsGearButton: View {
     }
 }
 
-/// What's visible when the notch is collapsed — album art on the left, dancing bars
-/// on the right. The artwork and bars are tagged with `matchedGeometryEffect`
-/// against the music tab's matching elements (same ids in the shared namespace),
-/// so SwiftUI morphs their size and position when the notch opens/closes rather
-/// than cross-fading two separate copies.
+/// Collapsed artwork geometry and dancing bars. The root draws the artwork
+/// once, using this slot or the music header as its matched-geometry source.
 private struct CollapsedPeek: View {
     let namespace: Namespace.ID
     /// Side-docked pills stand upright, so the peek stacks vertically.
@@ -374,9 +381,8 @@ private struct CollapsedPeek: View {
 
     private var horizontalPeek: some View {
         HStack(spacing: 0) {
-            artwork
+            Color.clear
                 .frame(width: 14, height: 14)
-                .clipShape(Rectangle())
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
@@ -404,9 +410,8 @@ private struct CollapsedPeek: View {
     /// at the foot when a session is working.
     private var verticalPeek: some View {
         VStack(spacing: 0) {
-            artwork
+            Color.clear
                 .frame(width: 14, height: 14)
-                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
@@ -425,19 +430,4 @@ private struct CollapsedPeek: View {
         .padding(.vertical, 18)
     }
 
-    @ViewBuilder private var artwork: some View {
-        // No `.id`/`.transition` here — that pair runs its own opacity fade-in
-        // when the artwork view is inserted (which happens at the same moment
-        // as the matched-geometry morph), and the two animations were fighting
-        // each other and reading as a snap-then-settle.
-        // Also no `.aspectRatio` constraint — `Image` with an aspect-ratio
-        // layout fights matched-geometry's frame interpolation, so we let the
-        // image stretch to whatever frame matched is currently morphing through.
-        // Album art is square in practice so the visual is unchanged.
-        if let image = music.displayArt {
-            Image(nsImage: image).resizable()
-        } else {
-            Color.clear
-        }
-    }
 }
