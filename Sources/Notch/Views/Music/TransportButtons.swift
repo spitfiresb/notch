@@ -121,3 +121,16 @@ private struct PlayPauseGlyph: Shape {
         return path
     }
 }
+
+// Apply identical geometry timing to every transport control at both ends of
+// the expansion. Local press and glyph animations remain inside this modifier.
+extension View {
+    func transportGeometry(_ id: String, in namespace: Namespace.ID) -> some View {
+        matchedGeometryEffect(id: id, in: namespace)
+            .transaction { transaction in
+                if transaction.animation != nil {
+                    transaction.animation = .easeOut(duration: 0.18)
+                }
+            }
+    }
+}

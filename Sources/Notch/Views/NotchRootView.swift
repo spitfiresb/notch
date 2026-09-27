@@ -398,11 +398,15 @@ private struct CollapsedPeek: View {
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
-            if notch.isHoverPreview {
-                previewControls
-                    .transition(.opacity)
-                Spacer(minLength: 0)
-            }
+                .overlay {
+                    // Keep the matched controls mounted in their compact slots.
+                    // Hover only reveals them; inserting them here could animate
+                    // from their previous expanded-player positions.
+                    previewControls
+                        .opacity(notch.isHoverPreview ? 1 : 0)
+                        .allowsHitTesting(notch.isHoverPreview)
+                        .accessibilityHidden(!notch.isHoverPreview)
+                }
             DancingBars(color: music.displayAccent,
                         isPlaying: music.info.isPlaying)
                 .frame(width: 20, height: 14)
@@ -426,15 +430,15 @@ private struct CollapsedPeek: View {
         let layout = vertical ? AnyLayout(VStackLayout(spacing: 3)) : AnyLayout(HStackLayout(spacing: 6))
         return layout {
             TransportButton(symbol: "backward.fill", size: 13, enabled: showing) { music.previous() }
-                .matchedGeometryEffect(id: "chromePrevious", in: namespace)
+                .transportGeometry("chromePrevious", in: namespace)
                 .accessibilityLabel("Previous track")
             TransportButton(glyph: .playPause(music.info.isPlaying), size: 13, enabled: showing) {
                 music.togglePlayPause()
             }
-            .matchedGeometryEffect(id: "chromePlayPause", in: namespace)
+            .transportGeometry("chromePlayPause", in: namespace)
             .accessibilityLabel(music.info.isPlaying ? "Pause" : "Play")
             TransportButton(symbol: "forward.fill", size: 13, enabled: showing) { music.next() }
-                .matchedGeometryEffect(id: "chromeNext", in: namespace)
+                .transportGeometry("chromeNext", in: namespace)
                 .accessibilityLabel("Next track")
         }
     }
@@ -449,11 +453,15 @@ private struct CollapsedPeek: View {
                 .matchedGeometryEffect(id: "chromeArt", in: namespace)
                 .opacity(showing && music.displayArt != nil ? 1 : 0)
             Spacer(minLength: 0)
-            if notch.isHoverPreview {
-                previewControls
-                    .transition(.opacity)
-                Spacer(minLength: 0)
-            }
+                .overlay {
+                    // Keep the matched controls mounted in their compact slots.
+                    // Hover only reveals them; inserting them here could animate
+                    // from their previous expanded-player positions.
+                    previewControls
+                        .opacity(notch.isHoverPreview ? 1 : 0)
+                        .allowsHitTesting(notch.isHoverPreview)
+                        .accessibilityHidden(!notch.isHoverPreview)
+                }
             LengthwiseBars(color: music.displayAccent, isPlaying: music.info.isPlaying,
                            reach: 14, barWidth: 1.8, spacing: 1.3, fromRight: notch.dock == .right)
                 .matchedGeometryEffect(id: "chromeBars", in: namespace)

@@ -85,13 +85,13 @@ struct MusicTabView: View {
                             music.skip(by: -Double(skipSeconds))
                         }
                         TransportButton(symbol: "backward.end.fill", size: 13, enabled: info.hasContent) { music.previous() }
-                            .matchedGeometryEffect(id: "chromePrevious", in: namespace)
+                            .transportGeometry("chromePrevious", in: namespace)
                         PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
                             music.togglePlayPause()
                         }
-                        .matchedGeometryEffect(id: "chromePlayPause", in: namespace)
+                        .transportGeometry("chromePlayPause", in: namespace)
                         TransportButton(symbol: "forward.end.fill", size: 13, enabled: info.hasContent) { music.next() }
-                            .matchedGeometryEffect(id: "chromeNext", in: namespace)
+                            .transportGeometry("chromeNext", in: namespace)
                         TransportButton(symbol: "goforward.\(skipSeconds)", size: 13, enabled: info.hasContent) {
                             music.skip(by: Double(skipSeconds))
                         }
@@ -105,13 +105,13 @@ struct MusicTabView: View {
                 } else {
                     HStack(spacing: 26) {
                         TransportButton(symbol: "backward.fill", size: 13, enabled: info.hasContent) { music.previous() }
-                            .matchedGeometryEffect(id: "chromePrevious", in: namespace)
+                            .transportGeometry("chromePrevious", in: namespace)
                         PlayPauseButton(isPlaying: info.isPlaying, enabled: info.hasContent) {
                             music.togglePlayPause()
                         }
-                        .matchedGeometryEffect(id: "chromePlayPause", in: namespace)
+                        .transportGeometry("chromePlayPause", in: namespace)
                         TransportButton(symbol: "forward.fill", size: 13, enabled: info.hasContent) { music.next() }
-                            .matchedGeometryEffect(id: "chromeNext", in: namespace)
+                            .transportGeometry("chromeNext", in: namespace)
                     }
                     HStack {
                         SaveButton(enabled: spotifyActionsEnabled) {
