@@ -4,7 +4,7 @@ import Foundation
 /// sessions. Claude Code runs a shell command on each lifecycle event and feeds
 /// it JSON on stdin; our command is a tiny script that wraps that JSON with a
 /// timestamp + parent pid and appends it to a spool file that
-/// `ClaudeSessionStore` tails. A file (not a socket) so events buffer while
+/// `AgentSessionStore` tails. A file (not a socket) so events buffer while
 /// Notch isn't running and the store can rebuild state on launch.
 enum ClaudeHooks {
 

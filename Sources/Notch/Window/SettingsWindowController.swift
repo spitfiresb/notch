@@ -8,10 +8,11 @@ import SwiftUI
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     static var shared: SettingsWindowController?
 
-    convenience init(settings: SettingsStore, spotify: SpotifyLibrary) {
+    convenience init(settings: SettingsStore, spotify: SpotifyLibrary, agents: AgentSessionStore) {
         let root = SettingsView()
             .environmentObject(settings)
             .environmentObject(spotify)
+            .environmentObject(agents)
         let host = NSHostingController(rootView: root)
         let window = NSWindow(contentViewController: host)
         window.title = "Notch Settings"
@@ -26,13 +27,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// Show the settings window, bringing the existing one forward if already open.
     /// `LSUIElement` apps need an explicit activation or the window appears unfocused
     /// behind whatever the user was doing.
-    static func present(settings: SettingsStore, spotify: SpotifyLibrary) {
+    static func present(settings: SettingsStore, spotify: SpotifyLibrary, agents: AgentSessionStore) {
         if let existing = shared {
             NSApp.activate(ignoringOtherApps: true)
             existing.window?.makeKeyAndOrderFront(nil)
             return
         }
-        let controller = SettingsWindowController(settings: settings, spotify: spotify)
+        let controller = SettingsWindowController(settings: settings, spotify: spotify, agents: agents)
         shared = controller
         NSApp.activate(ignoringOtherApps: true)
         controller.showWindow(nil)

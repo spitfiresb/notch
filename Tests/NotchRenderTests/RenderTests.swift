@@ -24,7 +24,7 @@ final class RenderTests: XCTestCase {
         let screenshots = ScreenshotWatcher()
         let audioMeter = AudioMeter()
         let settings = SettingsStore()
-        let claude = ClaudeSessionStore()
+        let agents = AgentSessionStore()
         let cursor = CursorTracker()
 
         func inject<V: View>(_ v: V) -> some View {
@@ -34,7 +34,7 @@ final class RenderTests: XCTestCase {
                 .environmentObject(screenshots)
                 .environmentObject(audioMeter)
                 .environmentObject(settings)
-                .environmentObject(claude)
+                .environmentObject(agents)
                 .environmentObject(cursor)
         }
     }
@@ -76,6 +76,28 @@ final class RenderTests: XCTestCase {
         }
         let rep = NSBitmapImageRep(cgImage: cg)
         guard let png = rep.representation(using: .png, properties: [:]) else { return XCTFail("png \(name)") }
+        try? png.write(to: outDir.appendingPathComponent("\(name).png"))
+    }
+
+    /// ImageRenderer omits AppKit controls, scroll views and live TimelineView
+    /// content. Use an offscreen host for the session list and settings instead.
+    private func writeHosted(_ view: some View, size: CGSize, name: String) {
+        let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: size.width, height: size.height),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            return XCTFail("no hosted bitmap for \(name)")
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
+            return XCTFail("no hosted PNG for \(name)")
+        }
         try? png.write(to: outDir.appendingPathComponent("\(name).png"))
     }
 
@@ -129,7 +151,7 @@ final class RenderTests: XCTestCase {
     func testSideToast() {
         let env = Env()
         seed(env, podcast: false)
-        let session = ClaudeSession(id: "abc", cwd: "/Users/me/Desktop/notch",
+        let session = AgentSession(sessionID: "abc", cwd: "/Users/me/Desktop/notch",
                                     lastEventAt: Date(), startedAt: Date())
         for dock in [NotchDock.top, .right] {
             env.notch.dock = dock
@@ -137,6 +159,63 @@ final class RenderTests: XCTestCase {
             env.notch.isOpen = true
             writeDocked(env, dock: dock, name: "\(dock)-toast")
         }
+    }
+
+    func testCodexCharacterStudy() {
+        let poses: [CodexPose] = [.idle, .thinking, .running, .complete, .permission, .question, .compacting, .ko, .interrupted, .done]
+        let sheet = VStack(spacing: 22) {
+            ForEach(0..<2) { row in
+                HStack(spacing: 24) {
+                    ForEach(0..<5) { column in
+                        let pose = poses[row * 5 + column]
+                        VStack(spacing: 14) {
+                            CodexSprite(pose: pose, time: 1.1, height: 72)
+                            CodexSprite(pose: pose, time: 1.1, height: 15)
+                            Text(String(describing: pose)).font(.system(size: 11)).foregroundStyle(.white)
+                        }.frame(width: 84, height: 124)
+                    }
+                }
+            }
+        }.padding(24).background(Color(red: 0.08, green: 0.09, blue: 0.12))
+        write(sheet, size: CGSize(width: 600, height: 340), name: "codex-character-study")
+        let env = Env()
+        let session = AgentSession(sessionID: "sprite", provider: .codex, cwd: "/tmp/notch", lastEventAt: Date(), startedAt: Date())
+        for kind in [SessionToast.Kind.complete, .permission, .question, .failed] {
+            let view = env.inject(SessionToastView(toast: SessionToast(session: session, kind: kind), previewTime: 1.3))
+                .padding(.horizontal, 14).background(.black)
+            write(view, size: CGSize(width: 340, height: 64), name: "codex-character-banner-\(kind)")
+        }
+    }
+
+    func testCodexAndMixedSessions() {
+        let env = Env()
+        seed(env, podcast: false)
+        let now = Date()
+        env.agents.apply(["session_id": "codex-render", "hook_event_name": "UserPromptSubmit",
+                          "turn_id": "render-turn", "cwd": "/tmp/notch", "prompt": "Add Codex support"],
+                         at: now, hookParent: nil, provider: .codex, replaying: true)
+        for dock in NotchDock.allCases {
+            env.notch.dock = dock; env.notch.isOpen = false
+            writeDocked(env, dock: dock, name: "\(dock)-codex-collapsed")
+        }
+        env.agents.apply(["session_id": "claude-render", "hook_event_name": "PreToolUse",
+                          "cwd": "/tmp/website", "tool_name": "Edit", "tool_input": ["file_path": "App.swift"]],
+                         at: now, hookParent: nil, replaying: true)
+        for dock in NotchDock.allCases {
+            env.notch.dock = dock; env.notch.isOpen = true
+            env.notch.sessionsPanelExpanded = true
+            writeDocked(env, dock: dock, name: "\(dock)-mixed-sessions")
+        }
+        let session = env.agents.sessions.first { $0.provider == .codex }!
+        for kind in [SessionToast.Kind.complete, .permission, .question, .failed] {
+            env.notch.sessionsPanelExpanded = false
+            env.notch.dock = .top
+            env.notch.toast = .session(SessionToast(session: session, kind: kind))
+            writeDocked(env, dock: .top, name: "codex-toast-\(kind)")
+        }
+        writeHosted(env.inject(SessionsPanel()).padding(10).background(.black),
+                    size: CGSize(width: 280, height: 100), name: "mixed-session-rows")
+        writeHosted(env.inject(SettingsView()), size: CGSize(width: 480, height: 560), name: "settings-codex")
     }
 
     func testDrag() {

@@ -10,7 +10,7 @@ final class AppEnvironment: ObservableObject {
     let screenshots = ScreenshotWatcher()
     let audioMeter = AudioMeter()
     let settings = SettingsStore()
-    let claude = ClaudeSessionStore()
+    let agents = AgentSessionStore()
     let cursor = CursorTracker()
 
     private var cancellables = Set<AnyCancellable>()
@@ -64,16 +64,19 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] _ in self?.screenshots.rebindToCurrentDirectory() }
             .store(in: &cancellables)
         screenshots.start()
-        // Claude Code sessions: install hooks once on first launch (toggle in
-        // Settings removes them), then tail the event spool.
-        if settings.claudeSessionsEnabled && !ClaudeHooks.isInstalled { ClaudeHooks.install() }
+        // Independent provider toggles feed one session panel and toast stream.
         settings.$claudeSessionsEnabled
             .dropFirst()
             .removeDuplicates()
-            .sink { [weak self] on in self?.claude.setHooksEnabled(on) }
+            .sink { [weak self] on in self?.agents.setHooksEnabled(on) }
             .store(in: &cancellables)
-        claude.onAttention = { [weak self] s in
-            notchLog("claude-sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
+        settings.$codexSessionsEnabled
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] on in self?.agents.setHooksEnabled(on, provider: .codex) }
+            .store(in: &cancellables)
+        agents.onAttention = { [weak self] s in
+            notchLog("sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
             let kind: SessionToast.Kind
             switch s.state {
             case .done:    kind = .complete
@@ -85,14 +88,15 @@ final class AppEnvironment: ObservableObject {
         }
         // A needs-you toast is moot once the user has answered (or the
         // session is gone): fold it away early.
-        claude.$sessions
+        agents.$sessions
             .sink { [weak self] sessions in
                 guard let self, case .session(let t) = self.notch.toast, t.kind.needsYou else { return }
                 if let live = sessions.first(where: { $0.id == t.session.id }), live.needsAttention { return }
                 self.notch.dismissToast()
             }
             .store(in: &cancellables)
-        claude.start()
+        agents.start(claudeEnabled: settings.claudeSessionsEnabled,
+                     codexEnabled: settings.codexSessionsEnabled)
     }
 }
 
@@ -118,7 +122,7 @@ struct SessionToast: Equatable {
             }
         }
     }
-    let session: ClaudeSession
+    let session: AgentSession
     let kind: Kind
     /// Long folder names get clipped so the banner still fits `toastSize`.
     var message: String {

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Session rows shown in the space that opens beneath the tab.
 struct SessionsPanel: View {
-    @EnvironmentObject private var store: ClaudeSessionStore
+    @EnvironmentObject private var store: AgentSessionStore
 
     static let rowHeight: CGFloat = 35
     static let rowSpacing: CGFloat = 3
@@ -13,7 +13,7 @@ struct SessionsPanel: View {
 
     var body: some View {
         if store.sessions.isEmpty {
-            Text("No Claude sessions running")
+            Text("No agent sessions running")
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.4))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -31,7 +31,7 @@ struct SessionsPanel: View {
     }
 }
 
-extension ClaudeSession.State {
+extension AgentSession.State {
     var color: Color {
         switch self {
         case .idle:       .white.opacity(0.35)
@@ -57,7 +57,7 @@ extension ClaudeSession.State {
 }
 
 private struct SessionRow: View {
-    let session: ClaudeSession
+    let session: AgentSession
     let now: Date
     let action: () -> Void
     @State private var hovering = false
@@ -68,6 +68,13 @@ private struct SessionRow: View {
         if session.state == .done, let r = session.lastReply { return r }
         if let p = session.lastPrompt { return "› " + p }
         return "waiting for a prompt"
+    }
+
+    private var stateColor: Color {
+        if session.provider == .codex && (session.state == .thinking || session.state == .tool) {
+            return AgentSpinner.codexColor
+        }
+        return session.state.color
     }
 
     private var timer: String? {
@@ -81,7 +88,7 @@ private struct SessionRow: View {
         HStack(spacing: 8) {
             Group {
                 if session.isBusy || session.needsAttention {
-                    ClaudeSpinner(state: session.state, size: 10)
+                    AgentSpinner(provider: session.provider, state: session.state, size: 10)
                 } else {
                     Circle().fill(session.state.color).frame(width: 6, height: 6)
                 }
@@ -96,6 +103,9 @@ private struct SessionRow: View {
                     Text(session.projectName)
                         .font(.system(size: 11.5, weight: .semibold))
                         .lineLimit(1)
+                    Text(session.provider.label)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
                     if let b = session.branch {
                         Text(b)
                             .font(.system(size: 9.5, design: .monospaced))
@@ -110,7 +120,7 @@ private struct SessionRow: View {
                     }
                     Text(session.state.label)
                         .font(.system(size: 9.5, weight: .medium))
-                        .foregroundStyle(session.state.color)
+                        .foregroundStyle(stateColor)
                     if let timer {
                         Text(timer)
                             .font(.system(size: 9.5, design: .monospaced))

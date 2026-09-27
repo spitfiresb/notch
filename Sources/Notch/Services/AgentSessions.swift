@@ -2,10 +2,15 @@ import AppKit
 import Combine
 import Darwin
 
+enum AgentProvider: String, CaseIterable {
+    case claude, codex
+    var label: String { self == .claude ? "Claude" : "Codex" }
+}
+
 // MARK: - Model
 
-/// One live Claude Code session, as reconstructed from hook events.
-struct ClaudeSession: Identifiable, Equatable {
+/// One live coding-agent session, as reconstructed from provider hook events.
+struct AgentSession: Identifiable, Equatable {
     enum State: Equatable {
         /// Waiting for the user to type a prompt.
         case idle
@@ -24,11 +29,12 @@ struct ClaudeSession: Identifiable, Equatable {
     }
 
     enum Host: Equatable {
-        case terminal, vscode, other
+        case terminal, vscode, codex, other
         var symbol: String {
             switch self {
             case .terminal: "terminal"
             case .vscode:   "chevron.left.forwardslash.chevron.right"
+            case .codex:    "desktopcomputer"
             case .other:    "app.dashed"
             }
         }
@@ -36,13 +42,17 @@ struct ClaudeSession: Identifiable, Equatable {
             switch self {
             case .terminal: "Terminal"
             case .vscode:   "VS Code"
+            case .codex:    "Codex"
             case .other:    "Other"
             }
         }
     }
 
-    let id: String                       // Claude's session_id
-    var pid: pid_t?                      // the `claude` process, once resolved
+    let sessionID: String               // provider's session_id
+    var provider: AgentProvider = .claude
+    var id: String { provider.rawValue + ":" + sessionID }
+    var turnID: String?
+    var pid: pid_t?                      // owning agent process, once resolved
     var tty: String?                     // e.g. "ttys001" — for terminal window lookup
     var host: Host = .other
     var cwd: String
@@ -88,6 +98,7 @@ struct ClaudeSession: Identifiable, Equatable {
         switch Proc.hostApplication(of: claude)?.bundleIdentifier {
         case "com.apple.Terminal":   host = .terminal
         case "com.microsoft.VSCode": host = .vscode
+        case "com.openai.codex", "com.openai.chat": host = .codex
         default:                     host = .other
         }
     }
@@ -96,33 +107,32 @@ struct ClaudeSession: Identifiable, Equatable {
 // MARK: - Store
 
 /// Tails the hook spool file, folds events into `sessions`, and drops sessions
-/// whose `claude` process has exited. Also knows how to bring a session's
+/// whose agent process has exited. Also knows how to bring a session's
 /// terminal window to the front.
 @MainActor
-final class ClaudeSessionStore: ObservableObject {
-    @Published private(set) var sessions: [ClaudeSession] = []
-    @Published private(set) var hooksInstalled = false
+final class AgentSessionStore: ObservableObject {
+    @Published private(set) var sessions: [AgentSession] = []
+    @Published private(set) var integrationErrors: [AgentProvider: String] = [:]
+    var onAttention: ((AgentSession) -> Void)?
 
-    /// Fired when a session flips into a state that deserves a nudge
-    /// (needs permission / finished / failed). UI decides how loud to be.
-    var onAttention: ((ClaudeSession) -> Void)?
-
-    private var byID: [String: ClaudeSession] = [:]
-    private var fd: Int32 = -1
-    private var offset: UInt64 = 0
-    private var source: DispatchSourceFileSystemObject?
+    private var byID: [String: AgentSession] = [:]
+    private var spools: [AgentProvider: SessionEventSpool] = [:]
+    private var enabledProviders = Set<AgentProvider>()
+    private var codexMonitor: CodexSessionMonitor?
     private var livenessTimer: Timer?
-    private var pendingBuffer = Data()
     private var tick = 0
     private let network = NetworkActivityMonitor()
-    /// True while folding the spool that accumulated before launch: state is
-    /// rebuilt silently, no toasts for events that are already history.
-    private var replaying = false
+    private let resolveAncestor: (pid_t, AgentProvider) -> pid_t?
+    private let processes: (AgentProvider) -> [(pid: pid_t, cwd: String)]
 
-    private static let spoolTruncateBytes: UInt64 = 4_000_000
+    init(resolveAncestor: @escaping (pid_t, AgentProvider) -> pid_t? = { Proc.findAgentAncestor(of: $0, provider: $1) },
+         processes: @escaping (AgentProvider) -> [(pid: pid_t, cwd: String)] = { Proc.agentProcesses(provider: $0) }) {
+        self.resolveAncestor = resolveAncestor
+        self.processes = processes
+    }
 
     /// Sessions sorted for display: needs-you first, then busiest/most recent.
-    var ordered: [ClaudeSession] {
+    var ordered: [AgentSession] {
         sessions.sorted { a, b in
             if a.needsAttention != b.needsAttention { return a.needsAttention }
             if a.isBusy != b.isBusy { return a.isBusy }
@@ -133,24 +143,26 @@ final class ClaudeSessionStore: ObservableObject {
     var anyActive: Bool { sessions.contains { $0.isBusy || $0.needsAttention } }
     /// What the single collapsed-pill spinner should express: needs-you wins
     /// over plain busy.
-    var headlineState: ClaudeSession.State {
+    var headlineState: AgentSession.State {
         if sessions.contains(where: \.needsAttention) { return .waiting }
-        return .tool
+        return ordered.first(where: { $0.isBusy })?.state ?? .idle
+    }
+
+    var headlineProvider: AgentProvider {
+        ordered.first(where: { $0.isBusy || $0.needsAttention })?.provider ?? .claude
     }
 
     // MARK: Lifecycle
 
-    func start() {
-        hooksInstalled = ClaudeHooks.isInstalled
-        ClaudeHooks.ensureScript()
-        replayAndTruncate()
-        openSpool()
-        // The vnode source is the fast path; the poll is a safety net so a
-        // missed kqueue event can never stall the tail.
+    func start(claudeEnabled: Bool, codexEnabled: Bool) {
+        setHooksEnabled(claudeEnabled, provider: .claude)
+        setHooksEnabled(codexEnabled, provider: .codex)
+        livenessTimer?.invalidate()
         livenessTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.readNew()
+                for spool in self.spools.values { spool.readNew() }
+                self.codexMonitor?.poll()
                 self.tick += 1
                 self.detectInterrupts()
                 self.detectSilentInterrupts()
@@ -159,91 +171,79 @@ final class ClaudeSessionStore: ObservableObject {
         }
     }
 
-    /// Tear down the nettop child so it doesn't outlive the app.
-    func shutdown() { network.watch([]) }
-
-    func setHooksEnabled(_ enabled: Bool) {
-        if enabled { ClaudeHooks.install() } else { ClaudeHooks.uninstall() }
-        hooksInstalled = ClaudeHooks.isInstalled
+    func shutdown() {
+        livenessTimer?.invalidate()
+        livenessTimer = nil
+        spools.values.forEach { $0.stop() }
+        spools.removeAll()
+        codexMonitor?.stop()
+        codexMonitor = nil
+        network.watch([])
     }
 
-    // MARK: Spool tailing
-
-    /// On launch: fold everything that accumulated while we were away, then
-    /// truncate so the file can't grow forever. Dead sessions get reaped right
-    /// after, so a stale spool doesn't resurrect ghosts.
-    private func replayAndTruncate() {
-        let url = ClaudeHooks.spoolURL
-        if let data = try? Data(contentsOf: url) {
-            replaying = true
-            ingest(data)
-            replaying = false
+    func setHooksEnabled(_ enabled: Bool, provider: AgentProvider = .claude) {
+        // Stop observing immediately on opt-out, including already buffered events.
+        if !enabled {
+            enabledProviders.remove(provider)
+            spools.removeValue(forKey: provider)?.stop()
+            byID = byID.filter { $0.value.provider != provider }
+            publish()
         }
-        try? Data().write(to: url)
-        offset = 0
-        reapDead()
-    }
-
-    private func openSpool() {
-        source?.cancel(); source = nil
-        fd = open(ClaudeHooks.spoolURL.path, O_EVTONLY)
-        guard fd >= 0 else { notchLog("claude-sessions: spool open failed"); return }
-        let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: [.write, .extend, .delete, .rename], queue: .main)
-        src.setEventHandler { [weak self] in
-            guard let self else { return }
-            if src.data.contains(.delete) || src.data.contains(.rename) {
-                // Someone removed the spool — recreate and re-arm.
-                ClaudeHooks.ensureScript()
-                self.offset = 0
-                self.openSpool()
-                return
+        if provider == .codex {
+            codexMonitor?.stop()
+            codexMonitor = nil
+            // Retire only our old hook definitions. Monitoring never depends on this cleanup.
+            do {
+                try CodexHooks.current.setEnabled(false)
+                integrationErrors.removeValue(forKey: .codex)
+            } catch {
+                integrationErrors[.codex] = "Old Notch hooks could not be removed: \(error.localizedDescription)"
             }
-            self.readNew()
+            guard enabled else { return }
+            enabledProviders.insert(.codex)
+            let monitor = CodexSessionMonitor()
+            monitor.onEvents = { [weak self] events in
+                guard let self, self.enabledProviders.contains(.codex) else { return }
+                for event in events {
+                    self.apply(event.payload, at: event.date, hookParent: event.pid,
+                               provider: .codex, replaying: event.replaying)
+                }
+            }
+            codexMonitor = monitor
+            monitor.poll()
+            return
         }
-        src.setCancelHandler { [fd] in close(fd) }
-        src.resume()
-        source = src
-        readNew()
-    }
-
-    private func readNew() {
-        guard let fh = try? FileHandle(forReadingFrom: ClaudeHooks.spoolURL) else { return }
-        defer { try? fh.close() }
-        let size = (try? fh.seekToEnd()) ?? 0
-        if size < offset { offset = 0 }            // truncated underneath us
-        guard size > offset else { return }
-        try? fh.seek(toOffset: offset)
-        guard let data = try? fh.readToEnd() else { return }
-        offset = size
-        ingest(data)
-        if size > Self.spoolTruncateBytes {
-            try? Data().write(to: ClaudeHooks.spoolURL)
-            offset = 0
-        }
-    }
-
-    private func ingest(_ data: Data) {
-        pendingBuffer.append(data)
-        // Lines are complete once a newline lands; keep any partial tail.
-        while let nl = pendingBuffer.firstIndex(of: 0x0A) {
-            let line = pendingBuffer.subdata(in: pendingBuffer.startIndex..<nl)
-            pendingBuffer.removeSubrange(pendingBuffer.startIndex...nl)
-            guard !line.isEmpty,
-                  let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  let event = obj["event"] as? [String: Any]
-            else { continue }
-            let ts = (obj["ts"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? Date()
-            let hookPID = (obj["pid"] as? Int).map { pid_t($0) }
-            apply(event, at: ts, hookParent: hookPID)
+        do {
+            let ok = enabled ? ClaudeHooks.install() : ClaudeHooks.uninstall()
+            guard ok else { throw CocoaError(.fileWriteUnknown) }
+            let url = ClaudeHooks.spoolURL
+            integrationErrors.removeValue(forKey: provider)
+            guard enabled else { return }
+            enabledProviders.insert(provider)
+            if spools[provider] == nil {
+                let spool = SessionEventSpool(url: url)
+                spool.onEvent = { [weak self] event, date, pid, replaying in
+                    guard let self, self.enabledProviders.contains(provider) else { return }
+                    self.apply(event, at: date, hookParent: pid, provider: provider, replaying: replaying)
+                }
+                spools[provider] = spool
+                spool.start()
+                reapDead()
+            }
+        } catch {
+            integrationErrors[provider] = "Could not update \(provider.label) hooks: \(error.localizedDescription)"
+            notchLog("sessions: \(provider.rawValue) hook setup failed: \(error)")
         }
     }
 
     // MARK: Event folding
 
-    private func apply(_ e: [String: Any], at ts: Date, hookParent: pid_t?) {
-        guard let id = e["session_id"] as? String,
+    func apply(_ e: [String: Any], at ts: Date, hookParent: pid_t?,
+               provider: AgentProvider = .claude, replaying: Bool = false) {
+        guard let sessionID = e["session_id"] as? String, !sessionID.isEmpty,
               let name = e["hook_event_name"] as? String else { return }
+        guard (provider == .claude ? ClaudeHooks.events : CodexHooks.events + ["CodexContext", "CodexPrompt"]).contains(name) else { return }
+        let id = provider.rawValue + ":" + sessionID
         let cwd = e["cwd"] as? String ?? ""
 
         if name == "SessionEnd" {
@@ -251,33 +251,44 @@ final class ClaudeSessionStore: ObservableObject {
             // `clear`/`resume` end the transcript but the process lives on and
             // will fire a fresh SessionStart with a new id. Drop this one.
             byID.removeValue(forKey: id)
-            notchLog("claude-sessions: end \(id.prefix(8)) (\(reason))")
+            notchLog("sessions: end \(id.prefix(8)) (\(reason))")
             publish()
             return
         }
 
-        var s = byID[id] ?? ClaudeSession(id: id, cwd: cwd, lastEventAt: ts, startedAt: ts)
+        var s = byID[id] ?? AgentSession(sessionID: sessionID, provider: provider, cwd: cwd, lastEventAt: ts, startedAt: ts)
+        if provider == .codex, let turn = e["turn_id"] as? String {
+            if name != "UserPromptSubmit", let active = s.turnID, active != turn { return }
+            if name != "UserPromptSubmit", s.turnID == turn,
+               s.state == .done || s.state == .failed { return }
+            s.turnID = turn
+        }
         s.lastEventAt = ts
-        if !cwd.isEmpty { s.cwd = cwd }
+        if let model = e["model"] as? String { s.model = model }
+        if !cwd.isEmpty {
+            if s.cwd != cwd { s.branch = nil }
+            s.cwd = cwd
+        }
         if let t = e["transcript_path"] as? String { s.transcriptPath = t }
         // Pin to the claude process. Re-resolve every event so an early wrong
         // guess self-heals; when the hook's parent is already gone (replayed
         // events, or a short-lived `sh -c`), fall back to a live claude
         // process in this session's folder that no other session owns.
-        if let hp = hookParent, let claude = Proc.findClaudeAncestor(of: hp), claude != s.pid {
+        if let hp = hookParent, let claude = resolveAncestor(hp, provider), claude != s.pid {
             s.attach(pid: claude)
         } else if s.pid == nil || !Proc.isAlive(s.pid!) {
             let claimed = Set(byID.values.filter { $0.id != id }.compactMap(\.pid))
-            if let p = Proc.claudeProcesses().first(where: { $0.cwd == s.cwd && !claimed.contains($0.pid) }) {
+            // Folder matching cannot identify a Codex thread in a shared app server.
+            if provider == .claude, let p = processes(provider).first(where: { $0.cwd == s.cwd && !claimed.contains($0.pid) }) {
                 s.attach(pid: p.pid)
             }
         }
-        // One process = one session. A `/clear` or resume hands the same
+        // Claude uses one process per session. A `/clear` or resume hands the same
         // process a new session id; the old entry is superseded, not a sibling.
-        if let p = s.pid {
-            for (otherID, o) in byID where otherID != id && o.pid == p {
+        if provider == .claude, let p = s.pid {
+            for (otherID, o) in byID where otherID != id && o.provider == provider && o.pid == p {
                 byID.removeValue(forKey: otherID)
-                notchLog("claude-sessions: \(otherID.prefix(8)) superseded by \(id.prefix(8)) (pid \(p))")
+                notchLog("sessions: \(otherID.prefix(8)) superseded by \(id.prefix(8)) (pid \(p))")
             }
         }
         if s.branch == nil || name == "SessionStart" || name == "CwdChanged" {
@@ -288,15 +299,18 @@ final class ClaudeSessionStore: ObservableObject {
         switch name {
         case "SessionStart":
             s.model = e["model"] as? String ?? s.model
-            let reason = e["session_start_reason"] as? String ?? ""
+            let reason = e["session_start_reason"] as? String ?? e["source"] as? String ?? ""
             // A compaction restart keeps the turn running; everything else is a fresh idle.
             if reason != "compact" { s.state = .idle; s.activity = nil; s.attention = nil }
+        case "CodexPrompt":
+            s.lastPrompt = Self.snippet(e["prompt"] as? String)
         case "UserPromptSubmit":
             s.state = .thinking
             s.turnStartedAt = ts
             s.turnEndedAt = nil
             s.interruptedAt = nil
             s.attention = nil
+            s.waitingReason = nil
             s.activity = nil
             s.lastReply = nil
             s.subagentCount = 0
@@ -312,10 +326,20 @@ final class ClaudeSessionStore: ObservableObject {
             s.attention = nil
             s.activity = Self.describeTool(name: e["tool_name"] as? String,
                                            input: e["tool_input"] as? [String: Any])
+            if provider == .codex,
+               ["request_user_input", "request_user_input_async"].contains(e["tool_name"] as? String ?? "") {
+                s.state = .waiting
+                s.waitingReason = .question
+                let questions = (e["tool_input"] as? [String: Any])?["questions"] as? [[String: Any]]
+                s.attention = Self.snippet(questions?.first?["question"] as? String
+                                          ?? questions?.first?["title"] as? String) ?? "Needs your input"
+            }
         case "PostToolUse", "PostToolUseFailure":
             if let t = s.interruptedAt, ts.timeIntervalSince(t) < Self.interruptHookGrace { break }
             s.interruptedAt = nil
             s.state = .thinking
+            s.attention = nil
+            s.waitingReason = nil
             if name == "PostToolUseFailure", let err = e["tool_error"] as? String {
                 s.activity = "⚠︎ \(Self.snippet(err, max: 60) ?? "tool failed")"
             } else {
@@ -351,7 +375,17 @@ final class ClaudeSessionStore: ObservableObject {
                 }
             default: break
             }
+        case "Interrupt":
+            s.state = .done
+            s.activity = nil
+            s.attention = nil
+            s.waitingReason = nil
+            s.turnEndedAt = ts
+            s.interruptedAt = ts
+            s.lastReply = "Interrupted"
         case "Stop":
+            s.attention = nil
+            s.waitingReason = nil
             s.state = .done
             s.activity = nil
             s.turnEndedAt = ts
@@ -377,7 +411,7 @@ final class ClaudeSessionStore: ObservableObject {
         }
 
         byID[id] = s
-        notchLog("claude-sessions: \(name) \(s.projectName) id=\(id.prefix(8)) pid=\(s.pid.map(String.init) ?? "?") tty=\(s.tty ?? "?") state=\(s.state) \(s.activity ?? s.attention ?? "")")
+        notchLog("sessions: \(name) \(s.projectName) id=\(id.prefix(8)) pid=\(s.pid.map(String.init) ?? "?") tty=\(s.tty ?? "?") state=\(s.state) \(s.activity ?? s.attention ?? "")")
         publish()
         // No nudge for a turn the user cut short themselves.
         if !replaying, s.state != previous, s.interruptedAt == nil,
@@ -424,8 +458,8 @@ final class ClaudeSessionStore: ObservableObject {
         // included, so a session that flips tool -> thinking already has a
         // full window of history to judge); only sessions waiting on the
         // model are judged.
-        network.watch(Set(byID.values.filter(\.isBusy).compactMap(\.pid)))
-        let waiting = byID.values.filter { ($0.state == .thinking || $0.state == .compacting) && $0.pid != nil }
+        network.watch(Set(byID.values.filter { $0.provider == .claude && $0.isBusy }.compactMap(\.pid)))
+        let waiting = byID.values.filter { $0.provider == .claude && ($0.state == .thinking || $0.state == .compacting) && $0.pid != nil }
         let now = Date()
         var changed = false
         for s in waiting {
@@ -440,7 +474,7 @@ final class ClaudeSessionStore: ObservableObject {
             u.lastReply = "Interrupted"
             byID[s.id] = u
             changed = true
-            notchLog("claude-sessions: interrupted \(u.projectName) id=\(s.id.prefix(8)) — \(bytes) B in over \(Int(Self.silenceWindow)) s, no stream")
+            notchLog("sessions: interrupted \(u.projectName) id=\(s.id.prefix(8)) — \(bytes) B in over \(Int(Self.silenceWindow)) s, no stream")
         }
         if changed { publish() }
     }
@@ -448,7 +482,7 @@ final class ClaudeSessionStore: ObservableObject {
     private func detectInterrupts() {
         var changed = false
         let now = Date()
-        for (id, s) in byID where s.isBusy {
+        for (id, s) in byID where s.provider == .claude && s.isBusy {
             guard let path = s.transcriptPath,
                   let attrs = try? FileManager.default.attributesOfItem(atPath: path),
                   let size = (attrs[.size] as? NSNumber)?.uint64Value,
@@ -463,7 +497,7 @@ final class ClaudeSessionStore: ObservableObject {
             u.lastReply = "Interrupted"
             byID[id] = u
             changed = true
-            notchLog("claude-sessions: interrupted \(u.projectName) id=\(id.prefix(8))")
+            notchLog("sessions: interrupted \(u.projectName) id=\(id.prefix(8))")
         }
         transcriptSizes = transcriptSizes.filter { byID[$0.key] != nil }
         // No `onAttention` here: the user interrupted it themselves, no toast needed.
@@ -505,15 +539,15 @@ final class ClaudeSessionStore: ObservableObject {
     private func reapDead() {
         let now = Date()
         var changed = false
-        var live: [(pid: pid_t, cwd: String)]?
+        var live: [AgentProvider: [(pid: pid_t, cwd: String)]] = [:]
         for (id, s) in byID {
             let dead: Bool
             if let pid = s.pid {
                 dead = !Proc.isAlive(pid)
             } else {
                 let quiet = now.timeIntervalSince(s.lastEventAt)
-                if live == nil { live = Proc.claudeProcesses() }
-                let anyHere = live!.contains { $0.cwd == s.cwd }
+                if live[s.provider] == nil { live[s.provider] = processes(s.provider) }
+                let anyHere = live[s.provider]!.contains { $0.cwd == s.cwd }
                 dead = quiet > 3600 || (quiet > 60 && !anyHere)
             }
             if dead { byID.removeValue(forKey: id); changed = true }
@@ -534,9 +568,17 @@ final class ClaudeSessionStore: ObservableObject {
         guard let name else { return nil }
         let base = { (path: String) in (path as NSString).lastPathComponent }
         switch name {
-        case "Bash":
-            let cmd = (input?["command"] as? String)?.components(separatedBy: "\n").first ?? ""
+        case "Bash", "exec_command", "shell_command":
+            let cmd = (input?["command"] as? String ?? input?["cmd"] as? String)?.components(separatedBy: "\n").first ?? ""
             return "Bash · " + (snippet(cmd, max: 60) ?? "")
+        case "apply_patch":
+            if let patch = input?["command"] as? String,
+               let line = patch.components(separatedBy: "\n").first(where: {
+                   $0.hasPrefix("*** Update File: ") || $0.hasPrefix("*** Add File: ") || $0.hasPrefix("*** Delete File: ")
+               }), let colon = line.firstIndex(of: ":") {
+                return "Edit · " + base(String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces))
+            }
+            return "Edit files"
         case "Read", "Edit", "Write", "NotebookEdit", "MultiEdit":
             if let p = input?["file_path"] as? String ?? input?["notebook_path"] as? String {
                 return "\(name) · \(base(p))"
@@ -545,8 +587,8 @@ final class ClaudeSessionStore: ObservableObject {
         case "Grep", "Glob":
             if let p = input?["pattern"] as? String { return "\(name) · \(snippet(p, max: 40) ?? "")" }
             return name
-        case "Agent", "Task":
-            if let d = input?["description"] as? String { return "Agent · \(snippet(d, max: 50) ?? "")" }
+        case "Agent", "Task", "spawn_agent":
+            if let d = input?["description"] as? String ?? input?["message"] as? String { return "Agent · \(snippet(d, max: 50) ?? "")" }
             return "Agent"
         case "WebFetch", "WebSearch":
             if let q = input?["url"] as? String ?? input?["query"] as? String {
@@ -568,12 +610,12 @@ final class ClaudeSessionStore: ObservableObject {
     /// hosts: Terminal.app (tab matched by tty) and VS Code (activate, then
     /// raise the window whose title mentions the project folder). Anything
     /// else just gets its app activated.
-    func focus(_ session: ClaudeSession) {
+    func focus(_ session: AgentSession) {
         guard let pid = session.pid,
               let host = Proc.hostApplication(of: pid) else { return }
         let bundle = host.bundleIdentifier ?? ""
         let ttyPath = session.tty.map { "/dev/\($0)" }
-        notchLog("claude-sessions: focus \(session.projectName) host=\(bundle) tty=\(ttyPath ?? "-")")
+        notchLog("sessions: focus \(session.projectName) host=\(bundle) tty=\(ttyPath ?? "-")")
 
         if bundle == "com.apple.Terminal", let ttyPath {
             let hit = AppleScript.run("""
@@ -653,13 +695,13 @@ enum Proc {
     }
 
     /// Every running native `claude` process with its cwd. ~1 ms; call sparingly.
-    static func claudeProcesses() -> [(pid: pid_t, cwd: String)] {
+    static func agentProcesses(provider: AgentProvider) -> [(pid: pid_t, cwd: String)] {
         let count = proc_listallpids(nil, 0)
         guard count > 0 else { return [] }
         var pids = [pid_t](repeating: 0, count: Int(count) + 64)
         let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
         var out: [(pid: pid_t, cwd: String)] = []
-        for pid in pids.prefix(Int(max(0, n))) where pid > 0 && isClaudeExecutable(path(pid)) {
+        for pid in pids.prefix(Int(max(0, n))) where pid > 0 && isAgentExecutable(path(pid), provider: provider) {
             out.append((pid, cwd(of: pid)))
         }
         return out
@@ -671,6 +713,23 @@ enum Proc {
     /// ("2.1.241"), so match the executable name (claude / node for the npm
     /// install) and otherwise take the first non-shell ancestor — the hook is
     /// spawned either directly by claude or through one `sh -c`.
+    static func isAgentExecutable(_ full: String, provider: AgentProvider) -> Bool {
+        if provider == .claude { return isClaudeExecutable(full) }
+        let exe = (full as NSString).lastPathComponent
+        return ["codex", "codex-aarch64-apple-darwin", "codex-x86_64-apple-darwin"].contains(exe)
+    }
+
+    static func findAgentAncestor(of pid: pid_t, provider: AgentProvider) -> pid_t? {
+        if provider == .claude { return findClaudeAncestor(of: pid) }
+        var current = pid
+        for _ in 0..<16 {
+            guard let i = info(current), i.pid > 1 else { return nil }
+            if isAgentExecutable(path(i.pid), provider: provider) { return i.pid }
+            current = i.ppid
+        }
+        return nil
+    }
+
     static func findClaudeAncestor(of pid: pid_t) -> pid_t? {
         var cur = pid
         for _ in 0..<8 {

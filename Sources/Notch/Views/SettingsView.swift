@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var spotify: SpotifyLibrary
+    @EnvironmentObject private var agents: AgentSessionStore
     @State private var clientIDDraft = ""
     @State private var showCleanupConfirm = false
     @State private var pendingCleanupCount = 0
@@ -50,6 +51,29 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("Claude Code")
+            }
+            Section {
+                Toggle(isOn: $settings.codexSessionsEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show live Codex sessions")
+                        Text("Automatically detect local Codex sessions, including terminals already running.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if settings.codexSessionsEnabled {
+                    Text("Works automatically from local session activity. No Codex hooks or terminal setup required.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let error = agents.integrationErrors[.codex] {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                    Button("Retry monitoring") {
+                        agents.setHooksEnabled(settings.codexSessionsEnabled, provider: .codex)
+                    }
+                }
+            } header: {
+                Text("Codex")
             }
             Section {
                 Toggle(isOn: $settings.routeScreenshotsToFolder) {

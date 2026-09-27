@@ -1,7 +1,7 @@
 import XCTest
 @testable import Notch
 
-/// `ClaudeSessionStore.transcriptEndsWithInterrupt` against the transcript
+/// `AgentSessionStore.transcriptEndsWithInterrupt` against the transcript
 /// shapes Claude Code actually writes around a Ctrl-C.
 final class InterruptDetectionTests: XCTestCase {
     private static let interrupt = #"{"type":"user","interruptedMessageId":"m1","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#
@@ -19,7 +19,7 @@ final class InterruptDetectionTests: XCTestCase {
         try! text.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
         let size = (try! FileManager.default.attributesOfItem(atPath: url.path)[.size] as! NSNumber).uint64Value
-        return ClaudeSessionStore.transcriptEndsWithInterrupt(path: url.path, size: size)
+        return AgentSessionStore.transcriptEndsWithInterrupt(path: url.path, size: size)
     }
 
     func testInterruptAsLastLine() {

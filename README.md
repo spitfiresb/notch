@@ -6,7 +6,7 @@
 
 ![Notch opening on hover](docs/assets/demo.gif)
 
-Music · audio-reactive bars · screenshots · your Spotify library · **live Claude Code sessions** — all in the notch, nothing in the Dock or menu bar.
+Music · audio-reactive bars · screenshots · your Spotify library · **live Claude Code and Codex sessions** — all in the notch, nothing in the Dock or menu bar.
 
 </div>
 
@@ -114,6 +114,16 @@ Session states, as the panel shows them: `idle` → `thinking` → `working` (to
 
 Everything happens in the notch: no extra tab, no window, no daemon. Turn it on from Settings → Claude Code; see [Getting started](#getting-started) for what that changes.
 
+### Live Codex sessions
+
+Codex shares the session panel with Claude, with a mint `>_` activity indicator and a provider label on each row. A 24-point blue pixel character animates notification banners: a completion run, permission hops, question sway, and a knockout pose for failure alerts. **Both integrations are enabled by default.** Download and launch Notch; already-running Codex terminal sessions are discovered automatically. No `/hooks`, trust prompts, terminal configuration, or Codex restart is needed.
+
+Notch identifies native Codex processes and reads the local rollout files they hold open. Prompts, tool activity, completed turns, and interruptions update the shared panel. Discovery and incremental reads run off the UI thread, approximately once per second. Initial history is replayed silently; closed sessions are removed. The actual open file identifies the session even when two terminals use the same folder or a custom `CODEX_HOME`.
+
+**Settings → Codex → Show live Codex sessions** controls monitoring. Explicit opt-outs are preserved. Notch no longer installs Codex hooks; on upgrade it removes only its previous hook definitions, preserving other hooks and `config.toml`.
+
+Direct Terminal.app sessions retain tab focus; VS Code sessions focus their project window. Other hosts and tmux may have limited focus support. Monitoring depends on Codex writing readable local rollout records (verified with CLI 0.153.4); sessions without those records and clients that do not keep their rollout open are not supported. Permission dialogs, compaction progress, and subagent counts are not guaranteed by this log format. Exact desktop-thread selection is not implemented.
+
 ### Lives on any edge
 
 The top of the screen is only the default. Click-hold the open notch and drag: it shrinks into a black droplet under the cursor while grey outlined pills appear on every edge it can go to — top, left, and right — with the nearest one lit, showing exactly where it will land. Let go and the droplet glides into that outline and becomes the notch: one object the whole way, no swap or fade. Side-docked, the collapsed notch is a slim upright pill — art at the head, the small audio meter turned to run lengthwise, the Claude spinner at the foot. Hover it and it opens into exactly the same panel as the top notch, just grown out sideways from the edge instead of down from the top: same tabs, same transport, same playlist and sessions fold-outs. The choice persists across launches.
@@ -138,7 +148,7 @@ This is not a menu-bar-app template. A few of the problems it solves:
 
 **First-class trackpad feel.** Two-finger horizontal swipes switch tabs (with haptic ticks), respecting natural-scrolling direction, and a gesture monitor keeps the panel from fighting the system during live Space swipes.
 
-**Watching Claude Code without a daemon.** Claude Code runs a shell command on every lifecycle hook and pipes it JSON. Notch's hook is a ten-line script that stamps the payload with a timestamp and its parent pid and appends it to a spool file; `ClaudeSessionStore` tails the file with a kqueue vnode source (plus a 1 Hz poll as a safety net), replays it on launch, and folds fifteen hook events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`/`PostToolUse`, `PermissionRequest`, `Notification`, `Stop`/`StopFailure`, `SubagentStart`/`Stop`, `PreCompact`/`PostCompact`, `CwdChanged`, `SessionEnd`) into each session's state machine. Sessions are matched to their `claude` process by executable path via `sysctl` — the native binary's `p_comm` is its version string, so name matching doesn't work — and the terminal tab is found by tty (Terminal.app) or window title (VS Code). The hook is registered `async` with a 5 s timeout and always exits 0, so it can never block or fail a session; Claude Code hot-reloads hooks, so flipping the switch takes effect in sessions that are already running.
+**Watching Claude Code without a daemon.** Claude Code runs a shell command on every lifecycle hook and pipes it JSON. Notch's hook is a ten-line script that stamps the payload with a timestamp and its parent pid and appends it to a spool file; `AgentSessionStore` tails the file with a kqueue vnode source (plus a 1 Hz poll as a safety net), replays it on launch, and folds fifteen hook events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`/`PostToolUse`, `PermissionRequest`, `Notification`, `Stop`/`StopFailure`, `SubagentStart`/`Stop`, `PreCompact`/`PostCompact`, `CwdChanged`, `SessionEnd`) into each session's state machine. Sessions are matched to their `claude` process by executable path via `sysctl` — the native binary's `p_comm` is its version string, so name matching doesn't work — and the terminal tab is found by tty (Terminal.app) or window title (VS Code). The hook is registered `async` with a 5 s timeout and always exits 0, so it can never block or fail a session; Claude Code hot-reloads hooks, so flipping the switch takes effect in sessions that are already running.
 
 **Guided permissions.** Instead of "go enable it in System Settings", the onboarding opens the exact privacy pane and floats a small overlay beside it showing what to do — an animated drag-into-the-list for Accessibility, a flip-the-toggle for Automation and Files & Folders — that tracks the Settings window and dismisses itself the moment the grant lands.
 
@@ -202,7 +212,7 @@ Sources/Notch/
 │   ├── SettingsView.swift
 │   ├── Music/                         Music tab: transport, scrubber, marquee, save button, saved-in panel
 │   ├── Screenshots/                   Screenshots tab: thumbnail strip, copied toast, thumbnail loader
-│   ├── Claude/                        Claude spinner + corner, sessions panel, Clawd sprite & toast
+│   ├── Claude/                        Shared agent panel/indicators/toasts; Claude Clawd sprite
 │   └── Shared/                        EmptyTab, Haptics
 ├── PermissionPrompt/                  Guided System Settings overlay (drag-row / toggle variants)
 └── Services/
@@ -210,7 +220,10 @@ Sources/Notch/
     ├── NowPlaying.swift               MediaRemote bridge + Spotify fallback
     ├── SpotifyLibrary.swift           Spotify Web API: OAuth (PKCE), library mirror, likes
     ├── ClaudeHooks.swift              Installs/removes the Claude Code hook entries + spool script
-    ├── ClaudeSessions.swift           Tails the spool, rebuilds session state, focuses terminals
+    ├── AgentSessions.swift            Shared Claude/Codex state, process identity, terminal focus
+    ├── CodexHooks.swift               Removes legacy Notch hook definitions
+    ├── CodexSessionMonitor.swift      Discovers Codex processes and tails open rollouts
+    ├── SessionEventSpool.swift        Independent buffered event-file readers
     ├── ScreenshotWatcher.swift        Screenshot detection, routing & cleanup
     ├── SpaceAttacher.swift            Private CGS space pinning
     ├── TrackpadGestureMonitor.swift   Live-gesture detection

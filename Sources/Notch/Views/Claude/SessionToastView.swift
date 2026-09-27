@@ -10,7 +10,9 @@ import SwiftUI
 /// session's terminal.
 struct SessionToastView: View {
     let toast: SessionToast
-    @EnvironmentObject private var store: ClaudeSessionStore
+    /// Fixed timeline for native render previews. Live banners use the clock.
+    var previewTime: TimeInterval? = nil
+    @EnvironmentObject private var store: AgentSessionStore
     @EnvironmentObject private var notch: NotchState
     @State private var start = Date()
 
@@ -20,8 +22,8 @@ struct SessionToastView: View {
     private static let run = 1.7
     /// Seconds per run-cycle frame.
     private static let stride = 0.085
-    /// A touch taller than the 12 pt label so he reads as a character, not a glyph.
-    private static let spriteHeight: CGFloat = 15
+    /// Codex needs a larger silhouette; keep Claude at its original height.
+    private var spriteHeight: CGFloat { toast.session.provider == .codex ? 24 : 15 }
     /// Horizontal inset NotchRootView applies to the toast content; the blob
     /// edge (where clipping happens) sits this far outside our bounds.
     private static let edgeInset: CGFloat = 14
@@ -45,10 +47,16 @@ struct SessionToastView: View {
         (toast.message as NSString).size(withAttributes: [.font: Self.labelFont, .kern: -0.1]).width
     }
 
+    private var spriteWidth: CGFloat {
+        toast.session.provider == .codex ? CodexSprite.width(forHeight: spriteHeight)
+            : ClawdSprite.width(forHeight: spriteHeight)
+    }
+
     /// Everything the timeline needs to draw one instant.
     private struct Pose {
         var x: CGFloat
         var bitmap: [String]
+        var codex: CodexPose = .running
         var bob: CGFloat = 0
         var rot: Double = 0
         var show = true
@@ -60,7 +68,7 @@ struct SessionToastView: View {
     }
 
     private func pose(at t: TimeInterval, width w: CGFloat) -> Pose {
-        let spriteW = ClawdSprite.width(forHeight: Self.spriteHeight)
+        let spriteW = spriteWidth
         let inset = Self.edgeInset
         let speed = (w + 2 * inset + spriteW) / Self.run          // pt per second
         let dur = { (px: CGFloat) in TimeInterval(px / speed) }
@@ -75,14 +83,17 @@ struct SessionToastView: View {
             let p = min(max((t - Self.lead) / Self.run, 0), 1)
             let x = entryX + (exitX - entryX) * CGFloat(p)
             let rf = runFrame(t - Self.lead)
-            return Pose(x: x, bitmap: rf.bitmap, bob: rf.bob, show: t >= Self.lead,
+            return Pose(x: x, bitmap: rf.bitmap, codex: .complete, bob: rf.bob, show: t >= Self.lead,
                         textLeft: (w - labelWidth) / 2, reveal: x + spriteW / 2)
         }
 
         // Stop-in-the-middle variants: Clawd + gap + label centred as a group.
-        let groupW = spriteW + Self.gap + labelWidth
+        // The tall Codex sprite falls past its right edge; reserve its height so
+        // the sideways body cannot cover the failure label.
+        let gap = Self.gap + (toast.session.provider == .codex && toast.kind == .failed ? spriteHeight : 0)
+        let groupW = spriteW + gap + labelWidth
         let stopX = (w - groupW) / 2
-        let textLeft = stopX + spriteW + Self.gap
+        let textLeft = stopX + spriteW + gap
         let inDur = dur(stopX - entryX)
         let arriveT = Self.lead + inDur
 
@@ -101,7 +112,7 @@ struct SessionToastView: View {
             let rot = 90 * (1 - pow(1 - fp, 2))                         // tip over, ease-out
             let opacity = t > fadeT ? max(0, 1 - (t - fadeT) / 0.4) : 1
             return Pose(x: stopX, bitmap: fp > 0.6 ? ClawdSprite.down : ClawdSprite.stand,
-                        rot: rot, opacity: opacity, textLeft: textLeft, reveal: nil)
+                        codex: fp > 0.6 ? .ko : .idle, rot: rot, opacity: opacity, textLeft: textLeft, reveal: nil)
         default:
             let leaveT = 4.4
             if t < leaveT {
@@ -110,11 +121,11 @@ struct SessionToastView: View {
                     let hop = since.truncatingRemainder(dividingBy: 0.7) / 0.7   // little hop every 0.7 s
                     let bob: CGFloat = hop < 0.35 ? CGFloat(-3 * sin(hop / 0.35 * .pi)) : 0
                     let blinkOn = Int(since / 0.35) % 2 == 0
-                    return Pose(x: stopX, bitmap: ClawdSprite.stand, bob: bob,
+                    return Pose(x: stopX, bitmap: ClawdSprite.stand, codex: .permission, bob: bob,
                                 glyph: blinkOn ? ClawdSprite.bang : nil, textLeft: textLeft, reveal: nil)
                 } else {
                     let rot = sin(since / 0.9 * 2 * .pi) * 7                 // slow rock
-                    return Pose(x: stopX, bitmap: ClawdSprite.stand, rot: rot,
+                    return Pose(x: stopX, bitmap: ClawdSprite.stand, codex: .question, rot: rot,
                                 glyph: ClawdSprite.query, textLeft: textLeft, reveal: nil)
                 }
             }
@@ -129,14 +140,14 @@ struct SessionToastView: View {
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            let spriteH = Self.spriteHeight
-            let spriteW = ClawdSprite.width(forHeight: spriteH)
+            let spriteH = spriteHeight
+            let spriteW = spriteWidth
             // Capped at 40 fps: uncapped .animation runs at display refresh
             // (120 Hz on ProMotion), and every frame relayouts the hosting
             // view. At the ~220 pt/s cruise that's ~5 pt a frame — quantized
             // motion that suits a pixel sprite whose run cycle steps at 85 ms.
             TimelineView(.animation(minimumInterval: 1.0 / 40.0)) { ctx in
-                let t = ctx.date.timeIntervalSince(start)
+                let t = previewTime ?? ctx.date.timeIntervalSince(start)
                 let p = pose(at: t, width: w)
                 let revealW: CGFloat = p.reveal.map { max(0, $0 - p.textLeft) } ?? (labelWidth + 4)
                 ZStack(alignment: .leading) {
@@ -149,7 +160,13 @@ struct SessionToastView: View {
                         .mask(alignment: .leading) { Rectangle().frame(width: revealW) }
                         .offset(x: p.textLeft)
                         .opacity(p.opacity)
-                    PixelBitmap(bitmap: p.bitmap, height: spriteH)
+                    Group {
+                        if toast.session.provider == .codex {
+                            CodexSprite(pose: p.codex, time: t, height: spriteH, animateBody: false, speech: false)
+                        } else {
+                            PixelBitmap(bitmap: p.bitmap, height: spriteH)
+                        }
+                    }
                         // The "down" bitmap is 2×; PixelBitmap sizes by row count.
                         .frame(width: spriteW, height: spriteH)
                         .rotationEffect(.degrees(p.rot), anchor: toast.kind == .failed ? .bottomTrailing : .center)

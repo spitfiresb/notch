@@ -8,7 +8,7 @@ struct MusicTabView: View {
     @EnvironmentObject private var spotify: SpotifyLibrary
     @EnvironmentObject private var notch: NotchState
     @EnvironmentObject private var settings: SettingsStore
-    @EnvironmentObject private var claude: ClaudeSessionStore
+    @EnvironmentObject private var agents: AgentSessionStore
     private var info: NowPlayingInfo { music.info }
 
     private static let trackFade: Animation = .easeInOut(duration: 0.34)
@@ -98,8 +98,8 @@ struct MusicTabView: View {
                     // the tab area while a session runs; the six-wide row reaches under
                     // it, so give up that strip and re-centre in what's left.
                     .frame(maxWidth: .infinity)
-                    .padding(.trailing, claude.anyActive ? Self.spinnerReserve : 0)
-                    .animation(.spring(response: 0.36, dampingFraction: 0.8), value: claude.anyActive)
+                    .padding(.trailing, agents.anyActive ? Self.spinnerReserve : 0)
+                    .animation(.spring(response: 0.36, dampingFraction: 0.8), value: agents.anyActive)
                 } else {
                     HStack(spacing: 26) {
                         TransportButton(symbol: "backward.fill", size: 13, enabled: info.hasContent) { music.previous() }

@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var trackpadGestureActive = false
 
     func applicationWillTerminate(_ notification: Notification) {
-        env.claude.shutdown()
+        env.agents.shutdown()
         SpaceAttacher.detach()
     }
 
@@ -47,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(env.screenshots)
             .environmentObject(env.audioMeter)
             .environmentObject(env.settings)
-            .environmentObject(env.claude)
+            .environmentObject(env.agents)
             .environmentObject(env.cursor)
         let panel = NotchPanel(rootView: root)
         self.panel = panel
@@ -178,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The window is always the largest (music-expanded) size; the visible
         // blob may be smaller, so hover-tracking follows the blob, not the
         // frame — anchored to whichever edge the notch is docked on.
-        let blobSize = notch.openBlobSize(sessionRows: env.claude.sessions.count)
+        let blobSize = notch.openBlobSize(sessionRows: env.agents.sessions.count)
         let blobRect = ScreenMetrics.blobScreenRect(for: notch.dock, size: blobSize)
 
         let mouse = NSEvent.mouseLocation
@@ -207,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Cursor moved back up into the regular tab area (above the
                 // spinner strip that opened the panel) — fold the panel away.
                 notch.sessionsPanelExpanded = false
-            } else if !notch.sessionsPanelExpanded, notch.toast == nil, env.claude.anyActive,
+            } else if !notch.sessionsPanelExpanded, notch.toast == nil, env.agents.anyActive,
                       SessionsCorner.hitRect(inBlob: blobRect, dock: notch.dock).contains(mouse) {
                 // Hovering the Claude spinner in the bottom-right corner
                 // unfolds the sessions panel. Done here (geometry) rather than
@@ -396,6 +396,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showSettingsWindow() {
-        SettingsWindowController.present(settings: env.settings, spotify: env.spotify)
+        SettingsWindowController.present(settings: env.settings, spotify: env.spotify, agents: env.agents)
     }
 }

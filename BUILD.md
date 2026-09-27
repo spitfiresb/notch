@@ -81,7 +81,7 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
 - `Services/ClaudeHooks.swift` — writes `~/Library/Application Support/Notch/claude-hook.sh` and
   adds/removes the matching hook entries in `~/.claude/settings.json` (only entries pointing at our
   script are ever touched).
-- `Services/ClaudeSessions.swift` — `ClaudeSessionStore`: tails the spool
+- `Services/AgentSessions.swift` — `AgentSessionStore`: shared Claude/Codex model and state machine; reads provider spools
   (`~/Library/Application Support/Notch/claude-events.jsonl`) via a vnode source + 1 s poll,
   replays it on launch, folds events into per-session state, dedupes by pid, reaps dead
   processes, and focuses the session's Terminal tab (by tty) or VS Code window (by title).
@@ -108,3 +108,14 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
   stills are `screencapture -R` of the notch region (the panel sits at x≈570, 300 pt wide)
   with a live session, and the GIFs are `screencapture -V` recordings cut with ffmpeg while
   fake `Stop` / `PermissionRequest` lines were appended to the spool as above.
+
+## Debugging Codex sessions
+
+- Claude and Codex monitoring default to on; explicit opt-outs remain off. Codex discovery does not require hooks, trust changes, shell configuration, or restarting existing terminal sessions.
+- `CodexSessionMonitor.swift` uses libproc to enumerate native Codex processes and their open `rollout-*.jsonl` file descriptors. It reads metadata and a bounded 2 MiB tail on initial discovery, then only appended bytes. Discovery and parsing run on a serial utility queue every second, outside the UI thread.
+- Each rollout maps to its actual owning PID. Multiple terminals in the same cwd remain separate. When a CLI retains older rollout descriptors after a resume, only its most recently modified root rollout is shown. Subagent metadata is excluded. Closed files/processes remove their rows; transient fd-inspection failures retain existing rows.
+- `task_started`, tool call/result records, `task_complete`, and `turn_aborted` feed the shared state machine. Initial replay is silent. Turn IDs prevent stale completions and late tool results from reviving an interrupted turn. `CodexContext` and `CodexPrompt` are internal normalized events, not Codex hooks.
+- `CodexHooks.swift` remains for migration cleanup and tests. On startup Notch removes only its own old entries from `hooks.json`; it does not write trust records or alter other hooks/configuration. Monitoring proceeds even if cleanup fails.
+- `swift test --filter 'CodexRolloutTests|CodexSessionTests|CodexHooksTests|SessionSpoolTests|InterruptDetectionTests'` covers real rollout shapes, bounded/silent initial replay, partial/malformed lines, file-descriptor discovery, same-folder sessions, resuming, cleanup, interruption, and Claude regression checks.
+- Live verification: launch Notch while Codex CLI is already running. Inspect `sessions:` entries in `~/Library/Logs/Notch/notch.log` for resolved Codex PIDs and terminal TTYs; send a prompt and check the mint indicator and completion toast. No `/hooks` step should be needed.
+- Compatibility: verified against native CLI 0.153.4. The local rollout schema is an implementation detail, so future versions require compatibility checks. Clients that do not hold a readable rollout open are not detected. Permission dialogs, compaction progress, and subagent counts are not guaranteed by the rollout format; terminal multiplexers and exact desktop-thread focus remain limited.

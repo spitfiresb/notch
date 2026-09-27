@@ -33,6 +33,10 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(claudeSessionsEnabled, forKey: Keys.claudeSessions) }
     }
 
+    @Published var codexSessionsEnabled: Bool {
+        didSet { UserDefaults.standard.set(codexSessionsEnabled, forKey: Keys.codexSessions) }
+    }
+
     /// How far the podcast transport buttons jump, in seconds. Spotify's own player
     /// is fixed at 15 both ways; 30 is the other interval people reach for, so we
     /// offer both rather than hard-coding one.
@@ -46,6 +50,7 @@ final class SettingsStore: ObservableObject {
 
     private enum Keys {
         static let claudeSessions = "settings.claudeSessionsEnabled"
+        static let codexSessions = "settings.codexSessionsEnabled"
         static let copyScreenshot = "settings.copyScreenshotToClipboard"
         static let launchAtLoginSeeded = "settings.launchAtLogin.seeded"
         static let podcastSkip = "settings.podcastSkipSeconds"
@@ -67,6 +72,10 @@ final class SettingsStore: ObservableObject {
             defaults.set(true, forKey: Keys.claudeSessions)
         }
         claudeSessionsEnabled = defaults.bool(forKey: Keys.claudeSessions)
+        if defaults.object(forKey: Keys.codexSessions) == nil {
+            defaults.set(true, forKey: Keys.codexSessions)
+        }
+        codexSessionsEnabled = defaults.bool(forKey: Keys.codexSessions)
         // Default to Spotify's own 15 s. Guard against a stale/garbage value so the
         // button never asks for an SF Symbol that doesn't exist.
         let storedSkip = defaults.integer(forKey: Keys.podcastSkip)

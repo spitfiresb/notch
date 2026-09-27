@@ -5,7 +5,7 @@ import SwiftUI
 /// a blob that grows/shrinks within it, so open/close is one smooth SwiftUI animation.
 struct NotchRootView: View {
     @EnvironmentObject private var notch: NotchState
-    @EnvironmentObject private var claude: ClaudeSessionStore
+    @EnvironmentObject private var agents: AgentSessionStore
 
     /// Shared namespace for `matchedGeometryEffect` on the album art and dancing
     /// bars — lets SwiftUI morph those elements between the peek's small layout
@@ -33,7 +33,7 @@ struct NotchRootView: View {
     private var blobSize: CGSize {
         if dragging { return ScreenMetrics.dropletSize }
         if notch.toast != nil { return ScreenMetrics.toastSize }
-        return notch.openBlobSize(sessionRows: claude.sessions.count)
+        return notch.openBlobSize(sessionRows: agents.sessions.count)
     }
     /// Where the blob sits, in screen-space layout coordinates: on its edge,
     /// or centred under the cursor while it's being dragged.
@@ -164,7 +164,7 @@ struct NotchRootView: View {
         .animation(Self.openAnim, value: notch.tab)
         .animation(Self.openAnim, value: notch.musicPanelExpanded)
         .animation(Self.openAnim, value: notch.sessionsPanelExpanded)
-        .animation(Self.openAnim, value: claude.sessions.count)
+        .animation(Self.openAnim, value: agents.sessions.count)
         .animation(transitionAnim, value: notch.toast)
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }
@@ -353,7 +353,7 @@ private struct CollapsedPeek: View {
     /// Side-docked pills stand upright, so the peek stacks vertically.
     var vertical: Bool = false
     @EnvironmentObject private var music: NowPlayingManager
-    @EnvironmentObject private var claude: ClaudeSessionStore
+    @EnvironmentObject private var agents: AgentSessionStore
     @EnvironmentObject private var notch: NotchState
 
     /// Show whenever there's *any* track loaded; we just freeze the bars when paused
@@ -367,7 +367,7 @@ private struct CollapsedPeek: View {
             if vertical { verticalPeek } else { horizontalPeek }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.spring(response: 0.36, dampingFraction: 0.8), value: claude.anyActive)
+        .animation(.spring(response: 0.36, dampingFraction: 0.8), value: agents.anyActive)
         .animation(Self.trackFade, value: music.displayKey)
         .animation(Self.trackFade, value: music.displayAccent)
     }
@@ -387,8 +387,8 @@ private struct CollapsedPeek: View {
                 .opacity(showing ? 1 : 0)
             // While a Claude session is working, its spinner slides in at the
             // right edge and nudges the bars left; gone again when it finishes.
-            if claude.anyActive {
-                ClaudeSpinner(state: claude.headlineState, size: 13)
+            if agents.anyActive {
+                AgentSpinner(provider: agents.headlineProvider, state: agents.headlineState, size: 13)
                     // The asterisk glyphs carry more ink below centre, so a
                     // geometrically centred spinner reads low next to the bars.
                     .offset(y: -1)
@@ -416,8 +416,8 @@ private struct CollapsedPeek: View {
                 .opacity(showing ? 1 : 0)
             // Like the top pill, the spinner slides in past the bars at the far
             // end and nudges them inward; gone again when the session finishes.
-            if claude.anyActive {
-                ClaudeSpinner(state: claude.headlineState, size: 13)
+            if agents.anyActive {
+                AgentSpinner(provider: agents.headlineProvider, state: agents.headlineState, size: 13)
                     .padding(.top, 8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }

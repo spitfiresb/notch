@@ -1,9 +1,34 @@
 import SwiftUI
 
+/// Provider identity stays visible in the collapsed pill and mixed session list.
+struct AgentSpinner: View {
+    var provider: AgentProvider
+    var state: AgentSession.State = .tool
+    var size: CGFloat = 12
+    var paused = false
+    static let codexColor = Color(red: 0.65, green: 0.88, blue: 0.80)
+
+    var body: some View {
+        if provider == .claude {
+            ClaudeSpinner(state: state, size: size, paused: paused)
+        } else {
+            TimelineView(.animation(minimumInterval: 0.6, paused: paused)) { context in
+                let bright = paused || Int(context.date.timeIntervalSinceReferenceDate / 0.6) % 2 == 0
+                Text(state == .waiting || state == .failed ? "!" : ">_")
+                    .font(.system(size: size * 0.85, weight: .bold, design: .monospaced))
+                    .foregroundStyle(state == .waiting || state == .failed ? ClaudeSpinner.amber : Self.codexColor)
+                    .opacity(bright ? 1 : 0.45)
+                    .frame(width: size + 2, height: size + 2)
+            }
+            .accessibilityLabel("Codex \(state.label)")
+        }
+    }
+}
+
 /// The Claude CLI's own "thinking" glyph cycle (· ✢ ✳ ∗ ✻ ✽) in Claude orange.
 /// Amber and static-ish when a session is blocked on you instead of working.
 struct ClaudeSpinner: View {
-    var state: ClaudeSession.State = .tool
+    var state: AgentSession.State = .tool
     var size: CGFloat = 12
     /// Freeze the glyph clock. Pass true whenever the spinner is mounted but
     /// not actually visible (e.g. behind an `.opacity(0)`): a ticking
@@ -35,7 +60,7 @@ struct ClaudeSpinner: View {
 /// Hovering it unfolds `SessionsPanel` beneath the tab; the hover watcher in
 /// AppDelegate folds it back when the cursor returns to the tab area above.
 struct SessionsCorner: View {
-    @EnvironmentObject private var claude: ClaudeSessionStore
+    @EnvironmentObject private var agents: AgentSessionStore
     @EnvironmentObject private var notch: NotchState
 
     /// Height of the strip along the bottom of the tab area that the spinner
@@ -59,11 +84,11 @@ struct SessionsCorner: View {
 
     var body: some View {
         ZStack {
-            if claude.anyActive {
+            if agents.anyActive {
                 // Paused while the corner is faded out (notch closed, or a
                 // toast on top) — the collapsed pill runs its own spinner
                 // then, and this one would just be ticking invisibly.
-                ClaudeSpinner(state: claude.headlineState, size: 14,
+                AgentSpinner(provider: agents.headlineProvider, state: agents.headlineState, size: 14,
                               paused: !notch.isOpen || notch.toast != nil)
                     .transition(.scale(scale: 0.4).combined(with: .opacity))
             }
@@ -71,12 +96,12 @@ struct SessionsCorner: View {
         .frame(width: 24, height: Self.stripHeight)
         .contentShape(Rectangle())
         .trackedHover { inside in
-            if inside, claude.anyActive, !notch.sessionsPanelExpanded {
+            if inside, agents.anyActive, !notch.sessionsPanelExpanded {
                 notch.sessionsPanelExpanded = true
             }
         }
-        .animation(.spring(response: 0.32, dampingFraction: 0.7), value: claude.anyActive)
-        .onChange(of: claude.anyActive) { _, active in
+        .animation(.spring(response: 0.32, dampingFraction: 0.7), value: agents.anyActive)
+        .onChange(of: agents.anyActive) { _, active in
             if !active { notch.sessionsPanelExpanded = false }
         }
     }
