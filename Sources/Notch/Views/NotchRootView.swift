@@ -33,7 +33,7 @@ struct NotchRootView: View {
     private var blobSize: CGSize {
         if dragging { return ScreenMetrics.dropletSize }
         if notch.toast != nil { return ScreenMetrics.toastSize }
-        return notch.openBlobSize(sessionRows: agents.sessions.count)
+        return notch.openBlobSize(sessionRows: agents.activeSessions.count)
     }
     /// Where the blob sits, in screen-space layout coordinates: on its edge,
     /// or centred under the cursor while it's being dragged.
@@ -164,7 +164,7 @@ struct NotchRootView: View {
         .animation(Self.openAnim, value: notch.tab)
         .animation(Self.openAnim, value: notch.musicPanelExpanded)
         .animation(Self.openAnim, value: notch.sessionsPanelExpanded)
-        .animation(Self.openAnim, value: agents.sessions.count)
+        .animation(Self.openAnim, value: agents.activeSessions.count)
         .animation(transitionAnim, value: notch.toast)
         // Hover open/close is driven by AppDelegate's cursor watcher.
     }

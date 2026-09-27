@@ -12,7 +12,7 @@ struct SessionsPanel: View {
     }
 
     var body: some View {
-        if store.sessions.isEmpty {
+        if store.activeSessions.isEmpty {
             Text("No agent sessions running")
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.4))
@@ -21,7 +21,7 @@ struct SessionsPanel: View {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: Self.rowSpacing) {
-                        ForEach(store.ordered) { s in
+                        ForEach(store.activeSessions) { s in
                             SessionRow(session: s, now: ctx.date) { store.focus(s) }
                         }
                     }

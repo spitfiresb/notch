@@ -90,6 +90,8 @@ struct AgentSession: Identifiable, Equatable {
     }
     var needsAttention: Bool { state == .waiting || state == .failed }
     var isBusy: Bool { state == .thinking || state == .tool || state == .compacting }
+    /// An unfinished turn, including one paused for user input.
+    var isActive: Bool { isBusy || state == .waiting }
 
     /// Pin this session to its `claude` process and derive tty / host from it.
     mutating func attach(pid claude: pid_t) {
@@ -131,25 +133,24 @@ final class AgentSessionStore: ObservableObject {
         self.processes = processes
     }
 
-    /// Sessions sorted for display: needs-you first, then busiest/most recent.
-    var ordered: [AgentSession] {
-        sessions.sorted { a, b in
+    /// Active sessions sorted for display: needs-you first, then most recent.
+    var activeSessions: [AgentSession] {
+        sessions.filter(\.isActive).sorted { a, b in
             if a.needsAttention != b.needsAttention { return a.needsAttention }
             if a.isBusy != b.isBusy { return a.isBusy }
             return a.lastEventAt > b.lastEventAt
         }
     }
     /// A session is mid-task: working, or blocked on you to keep working.
-    var anyActive: Bool { sessions.contains { $0.isBusy || $0.needsAttention } }
+    var anyActive: Bool { sessions.contains(where: \.isActive) }
     /// What the single collapsed-pill spinner should express: needs-you wins
     /// over plain busy.
     var headlineState: AgentSession.State {
-        if sessions.contains(where: \.needsAttention) { return .waiting }
-        return ordered.first(where: { $0.isBusy })?.state ?? .idle
+        activeSessions.first?.state ?? .idle
     }
 
     var headlineProvider: AgentProvider {
-        ordered.first(where: { $0.isBusy || $0.needsAttention })?.provider ?? .claude
+        activeSessions.first?.provider ?? .claude
     }
 
     // MARK: Lifecycle

@@ -178,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The window is always the largest (music-expanded) size; the visible
         // blob may be smaller, so hover-tracking follows the blob, not the
         // frame — anchored to whichever edge the notch is docked on.
-        let blobSize = notch.openBlobSize(sessionRows: env.agents.sessions.count)
+        let blobSize = notch.openBlobSize(sessionRows: env.agents.activeSessions.count)
         let blobRect = ScreenMetrics.blobScreenRect(for: notch.dock, size: blobSize)
 
         let mouse = NSEvent.mouseLocation
