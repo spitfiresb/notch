@@ -15,10 +15,21 @@ final class SettingsStore: ObservableObject {
     /// Auto-route screenshots into `~/Pictures/Screenshots` instead of the Desktop,
     /// managed via the system `com.apple.screencapture.location` preference. Pictures
     /// isn't TCC-protected, so this needs no folder permission — unlike watching the
-    /// Desktop. Flipping this off restores macOS's default Desktop location.
+    /// Desktop. Flipping this off restores the user's previous location.
     @Published var routeScreenshotsToFolder: Bool {
-        didSet { Self.applyScreenshotRouting(enabled: routeScreenshotsToFolder) }
+        didSet {
+            guard routeScreenshotsToFolder != oldValue else { return }
+            do {
+                try ScreenshotRouting.current.setEnabled(routeScreenshotsToFolder)
+                screenshotRoutingError = nil
+            } catch {
+                screenshotRoutingError = "Could not change the screenshot folder. Check that the folder is writable."
+            }
+            routeScreenshotsToFolder = Self.detectScreenshotRouting()
+        }
     }
+
+    @Published private(set) var screenshotRoutingError: String?
 
     /// Register the app as a login item so it comes back after restarts and
     /// shutdowns. Mirrors `SMAppService.mainApp` — the system is the source of
@@ -119,17 +130,4 @@ final class SettingsStore: ObservableObject {
         return (raw as NSString).expandingTildeInPath == managedScreenshotURL.path
     }
 
-    private static func applyScreenshotRouting(enabled: Bool) {
-        if enabled {
-            try? FileManager.default.createDirectory(at: managedScreenshotURL,
-                                                     withIntermediateDirectories: true)
-            CFPreferencesSetAppValue("location" as CFString,
-                                     managedScreenshotURL.path as CFString,
-                                     "com.apple.screencapture" as CFString)
-        } else {
-            CFPreferencesSetAppValue("location" as CFString, nil,
-                                     "com.apple.screencapture" as CFString)
-        }
-        CFPreferencesAppSynchronize("com.apple.screencapture" as CFString)
-    }
 }

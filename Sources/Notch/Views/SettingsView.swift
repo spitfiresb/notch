@@ -8,7 +8,10 @@ struct SettingsView: View {
     @EnvironmentObject private var agents: AgentSessionStore
     @State private var clientIDDraft = ""
     @State private var showCleanupConfirm = false
-    @State private var pendingCleanupCount = 0
+    @State private var pendingCleanup: [ScreenshotCleanup.Item] = []
+    @State private var cleanupBusy = false
+    @State private var cleanupStatus: String?
+    private var pendingCleanupCount: Int { pendingCleanup.count }
 
     var body: some View {
         Form {
@@ -84,6 +87,9 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if let error = settings.screenshotRoutingError {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                }
                 Toggle(isOn: $settings.copyScreenshotToClipboard) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Copy new screenshots to the clipboard")
@@ -101,21 +107,37 @@ struct SettingsView: View {
                     }
                     Spacer()
                     Button("Clean Up…") {
-                        pendingCleanupCount = ScreenshotWatcher.screenshotsInCurrentFolder().count
-                        showCleanupConfirm = pendingCleanupCount > 0
+                        cleanupBusy = true
+                        Task {
+                            do {
+                                pendingCleanup = try await ScreenshotCleanup.candidates(in: ScreenshotWatcher.screenshotDirectory)
+                                showCleanupConfirm = !pendingCleanup.isEmpty
+                                cleanupStatus = pendingCleanup.isEmpty ? "No screenshots to clean up." : nil
+                            } catch { cleanupStatus = "Couldn’t read the screenshot folder. Check folder access and try again." }
+                            cleanupBusy = false
+                        }
                     }
+                    .disabled(cleanupBusy)
                     .confirmationDialog(
                         "Move \(pendingCleanupCount) screenshot\(pendingCleanupCount == 1 ? "" : "s") to the Trash?",
                         isPresented: $showCleanupConfirm, titleVisibility: .visible
                     ) {
                         Button("Move to Trash", role: .destructive) {
-                            _ = ScreenshotWatcher.trashAllScreenshots()
+                            let confirmed = pendingCleanup
+                            cleanupBusy = true
+                            Task {
+                                let moved = await ScreenshotCleanup.trash(confirmed)
+                                cleanupStatus = "Moved \(moved) of \(confirmed.count) screenshots to the Trash."
+                                pendingCleanup = []; cleanupBusy = false
+                            }
                         }
                         Button("Cancel", role: .cancel) {}
                     } message: {
                         Text("Only files macOS created as screenshots are touched. You can restore them from the Trash.")
                     }
                 }
+                if cleanupBusy { ProgressView().controlSize(.small) }
+                if let cleanupStatus { Text(cleanupStatus).font(.caption).foregroundStyle(.secondary) }
             } header: {
                 Text("Screenshots")
             }
