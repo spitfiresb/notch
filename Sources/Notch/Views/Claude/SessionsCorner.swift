@@ -9,7 +9,13 @@ struct AgentSpinner: View {
     static let codexColor = Color(red: 0.65, green: 0.88, blue: 0.80)
 
     var body: some View {
-        if provider == .claude {
+        if state == .unknown {
+            Image(systemName: "ellipsis")
+                .font(.system(size: size * 0.8, weight: .bold))
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(width: size + 2, height: size + 2)
+                .accessibilityLabel("\(provider.label): detecting session activity")
+        } else if provider == .claude {
             ClaudeSpinner(state: state, size: size, paused: paused)
         } else {
             TimelineView(.animation(minimumInterval: 0.6, paused: paused)) { context in

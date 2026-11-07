@@ -6,7 +6,7 @@ import Foundation
 /// timestamp + parent pid and appends it to a spool file that
 /// `AgentSessionStore` tails. A file (not a socket) so events buffer while
 /// Notch isn't running and the store can rebuild state on launch.
-enum ClaudeHooks {
+struct ClaudeHooks {
 
     /// Every event we subscribe to. Anything else Claude Code emits is ignored.
     static let events = [
@@ -23,45 +23,48 @@ enum ClaudeHooks {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Notch", isDirectory: true)
     }
-    static var scriptURL: URL { supportDirectory.appendingPathComponent("claude-hook.sh") }
-    static var spoolURL: URL { supportDirectory.appendingPathComponent("claude-events.jsonl") }
-    static var settingsURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json")
+    static var current: ClaudeHooks {
+        let root = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+        return ClaudeHooks(settingsURL: root.appendingPathComponent("settings.json"),
+                           directory: supportDirectory)
     }
-
-    /// Substring that identifies our hook entries inside settings.json, so the
-    /// uninstaller only ever touches what we added.
-    private static let marker = "Notch/claude-hook.sh"
+    let settingsURL: URL
+    let directory: URL
+    var scriptURL: URL { directory.appendingPathComponent("claude-hook.sh") }
+    var spoolURL: URL { directory.appendingPathComponent("claude-events.jsonl") }
 
     // MARK: Script
 
-    private static var script: String {
+    var script: String {
         """
         #!/bin/bash
         # Installed by Notch.app — forwards Claude Code hook events to the notch.
         # Reads the hook JSON from stdin and appends one line to the spool file.
         # Safe to delete; Notch re-creates it. Never blocks or fails a session.
-        SPOOL="\(spoolURL.path)"
-        payload=$(cat | tr -d '\\n')
+        umask 077
+        payload=$(/bin/cat | /usr/bin/tr -d '\\n')
         [ -z "$payload" ] && exit 0
-        printf '{"ts":%s,"pid":%s,"event":%s}\\n' "$(date +%s)" "$PPID" "$payload" >> "$SPOOL" 2>/dev/null
+        printf '{"ts":%s,"pid":%s,"event":%s}\\n' "$(/bin/date +%s)" "$PPID" "$payload" >> \(CodexHooks.shellQuote(spoolURL.path)) 2>/dev/null
         exit 0
 
         """
     }
 
     @discardableResult
-    static func ensureScript() -> Bool {
+    func ensureScript() -> Bool {
         let fm = FileManager.default
         do {
-            try fm.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
             let current = try? String(contentsOf: scriptURL, encoding: .utf8)
             if current != script {
                 try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             }
-            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+            try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
             if !fm.fileExists(atPath: spoolURL.path) {
-                fm.createFile(atPath: spoolURL.path, contents: nil)
+                guard fm.createFile(atPath: spoolURL.path, contents: nil,
+                                    attributes: [.posixPermissions: 0o600]) else { return false }
             }
             return true
         } catch {
@@ -72,102 +75,93 @@ enum ClaudeHooks {
 
     // MARK: settings.json
 
-    private static func readSettings() -> [String: Any] {
-        guard let data = try? Data(contentsOf: settingsURL),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
-        return obj
-    }
-
-    private static func writeSettings(_ obj: [String: Any]) -> Bool {
-        do {
-            let data = try JSONSerialization.data(withJSONObject: obj,
-                                                  options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-            try FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            try data.write(to: settingsURL, options: .atomic)
-            return true
-        } catch {
-            notchLog("claude-hooks: settings write failed: \(error)")
-            return false
+    private func readSettings() throws -> (object: [String: Any], bytes: Data?) {
+        let bytes: Data
+        do { bytes = try Data(contentsOf: settingsURL) }
+        catch CocoaError.fileReadNoSuchFile { return ([:], nil) }
+        guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
+            throw CocoaError(.propertyListReadCorrupt)
         }
+        if let value = object["hooks"] {
+            guard let hooks = value as? [String: Any], hooks.values.allSatisfy({ value in
+                guard let groups = value as? [[String: Any]] else { return false }
+                return groups.allSatisfy { $0["hooks"] is [[String: Any]] }
+            }) else { throw CocoaError(.propertyListReadCorrupt) }
+        }
+        return (object, bytes)
     }
 
-    private static func isOurs(_ hook: [String: Any]) -> Bool {
-        (hook["command"] as? String)?.contains(marker) == true
+    private func isOurs(_ hook: [String: Any]) -> Bool {
+        guard hook["type"] as? String == "command", let command = hook["command"] as? String else { return false }
+        // Exact matching also recognizes our previous double-quoted command.
+        return command == CodexHooks.shellQuote(scriptURL.path) || command == "\"\(scriptURL.path)\""
     }
 
-    /// The exact entry `install()` writes. Quoted: the path has a space
-    /// (Application Support) and Claude runs the command through a shell.
-    private static var hookEntry: [String: Any] {
-        ["type": "command", "command": "\"\(scriptURL.path)\"", "timeout": 5, "async": true]
+    private var hookEntry: [String: Any] {
+        // A bounded synchronous append keeps lifecycle events in order. No decisions/output.
+        ["type": "command", "command": CodexHooks.shellQuote(scriptURL.path), "timeout": 2]
     }
 
-    /// Ours *and* up to date — an older-shaped entry counts as not installed so
-    /// launch re-runs `install()` and refreshes it.
-    private static func isCurrent(_ hook: [String: Any]) -> Bool {
-        isOurs(hook)
-            && hook["command"] as? String == hookEntry["command"] as? String
-            && hook["async"] as? Bool == true
-    }
-
-    /// True when every event we care about already routes to our script.
-    static var isInstalled: Bool {
-        guard let hooks = readSettings()["hooks"] as? [String: Any] else { return false }
-        return events.allSatisfy { event in
-            guard let groups = hooks[event] as? [[String: Any]] else { return false }
-            return groups.contains { g in
-                ((g["hooks"] as? [[String: Any]]) ?? []).contains(where: isCurrent)
+    var isInstalled: Bool {
+        guard let settings = try? readSettings(),
+              let hooks = settings.object["hooks"] as? [String: Any] else { return false }
+        return Self.events.allSatisfy { event in
+            (hooks[event] as? [[String: Any]] ?? []).contains { group in
+                group["matcher"] == nil && (group["hooks"] as? [[String: Any]] ?? []).contains {
+                    NSDictionary(dictionary: $0).isEqual(to: hookEntry)
+                }
             }
         }
     }
 
-    /// Adds one matcher-less group per event pointing at our script. Existing
-    /// user hooks are preserved untouched; re-running is idempotent.
-    @discardableResult
-    static func install() -> Bool {
-        guard ensureScript() else { return false }
-        var settings = readSettings()
+    /// Preserve invalid/unreadable files byte for byte. Monitoring runs independently.
+    /// Save the original bytes before a change and abandon a stale read if another writer edited it.
+    func setEnabled(_ enabled: Bool) throws {
+        let original = try readSettings()
+        var settings = original.object
+        if enabled {
+            guard ensureScript() else { throw CocoaError(.fileWriteUnknown) }
+            // Respect the user's explicit hook policy; transcript monitoring still works.
+            if settings["disableAllHooks"] as? Bool == true { return }
+        }
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
-        let ourHook = hookEntry
-        for event in events {
-            var groups = hooks[event] as? [[String: Any]] ?? []
-            // Drop any stale copies (older script path / options) then add fresh.
-            groups = groups.compactMap { g in
-                var g = g
-                let kept = ((g["hooks"] as? [[String: Any]]) ?? []).filter { !isOurs($0) }
-                if kept.isEmpty, (g["hooks"] as? [[String: Any]])?.isEmpty == false { return nil }
-                g["hooks"] = kept
-                return g
+        for event in Array(hooks.keys) {
+            let groups = hooks[event] as? [[String: Any]] ?? []
+            guard !groups.isEmpty else { continue }
+            let cleaned = groups.compactMap { group -> [String: Any]? in
+                let handlers = group["hooks"] as? [[String: Any]] ?? []
+                let kept = handlers.filter { !isOurs($0) }
+                guard kept.count != handlers.count else { return group }
+                guard !kept.isEmpty else { return nil }
+                var copy = group
+                copy["hooks"] = kept
+                return copy
             }
-            groups.append(["hooks": [ourHook]])
-            hooks[event] = groups
+            if cleaned.isEmpty { hooks.removeValue(forKey: event) }
+            else { hooks[event] = cleaned }
         }
-        settings["hooks"] = hooks
-        let ok = writeSettings(settings)
-        notchLog("claude-hooks: install \(ok ? "ok" : "FAILED")")
-        return ok
-    }
-
-    /// Removes only our entries; leaves everything else in settings.json alone.
-    @discardableResult
-    static func uninstall() -> Bool {
-        var settings = readSettings()
-        guard var hooks = settings["hooks"] as? [String: Any] else { return true }
-        for (event, value) in hooks {
-            guard let groups = value as? [[String: Any]] else { continue }
-            let cleaned: [[String: Any]] = groups.compactMap { g in
-                var g = g
-                let kept = ((g["hooks"] as? [[String: Any]]) ?? []).filter { !isOurs($0) }
-                if kept.isEmpty { return nil }
-                g["hooks"] = kept
-                return g
+        if enabled {
+            for event in Self.events {
+                var groups = hooks[event] as? [[String: Any]] ?? []
+                groups.append(["hooks": [hookEntry]])
+                hooks[event] = groups
             }
-            if cleaned.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = cleaned }
         }
-        if hooks.isEmpty { settings.removeValue(forKey: "hooks") } else { settings["hooks"] = hooks }
-        let ok = writeSettings(settings)
-        notchLog("claude-hooks: uninstall \(ok ? "ok" : "FAILED")")
-        return ok
+        if hooks.isEmpty { settings.removeValue(forKey: "hooks") }
+        else { settings["hooks"] = hooks }
+        guard !NSDictionary(dictionary: original.object).isEqual(to: settings) else { return }
+        let data = try JSONSerialization.data(withJSONObject: settings,
+                                              options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        if let bytes = original.bytes {
+            let backups = directory.appendingPathComponent("settings-backups")
+            try FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            let backup = backups.appendingPathComponent("claude-\(UUID().uuidString).json")
+            try bytes.write(to: backup, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+        }
+        guard try readSettings().bytes == original.bytes else { throw CocoaError(.fileWriteUnknown) }
+        try FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: settingsURL, options: .atomic)
     }
 }

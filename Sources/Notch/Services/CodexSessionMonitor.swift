@@ -52,7 +52,13 @@ final class CodexSessionMonitor {
         for process in processes() {
             guard let paths = openPaths(process.pid) else {
                 // Permission/transient inspection failure is not evidence of session exit.
-                found.formUnion(readers.filter { $0.value.pid == process.pid }.map(\.key))
+                let retained = readers.filter { $0.value.pid == process.pid }
+                found.formUnion(retained.map(\.key))
+                for reader in retained.values { events.append(contentsOf: reader.readNew()) }
+                if retained.isEmpty {
+                    events.append(Event(payload: ["session_id": "process:\(process.pid)", "cwd": process.cwd,
+                                                  "hook_event_name": "SessionObserved"], date: Date(), pid: process.pid, replaying: true))
+                }
                 continue
             }
             var candidates: [(String, CodexRolloutReader)] = []
@@ -61,6 +67,10 @@ final class CodexSessionMonitor {
                     ?? CodexRolloutReader(path: path, pid: process.pid)
                 guard let reader else { continue }
                 candidates.append((path, reader))
+            }
+            if paths.isEmpty && !readers.values.contains(where: { $0.pid == process.pid }) {
+                events.append(Event(payload: ["session_id": "process:\(process.pid)", "cwd": process.cwd,
+                                              "hook_event_name": "SessionObserved"], date: Date(), pid: process.pid, replaying: true))
             }
             // A CLI can retain the previous rollout's fd after /new or /resume.
             // The most recently written root CLI rollout owns the terminal now.
@@ -237,6 +247,13 @@ final class CodexRolloutReader {
 extension Proc {
     /// Native libproc inspection: no lsof subprocess, shell setup, or fixed CODEX_HOME.
     static func codexRolloutPaths(_ pid: pid_t) -> [String]? {
+        openFilePaths(pid)?.filter {
+            let name = ($0 as NSString).lastPathComponent
+            return name.hasPrefix("rollout-") && name.hasSuffix(".jsonl")
+        }
+    }
+
+    static func openFilePaths(_ pid: pid_t) -> [String]? {
         let bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
         guard bytes > 0 else { return nil }
         let stride = MemoryLayout<proc_fdinfo>.stride
@@ -249,12 +266,11 @@ extension Proc {
         for fd in fds.prefix(Int(count) / stride) where fd.proc_fdtype == PROX_FDTYPE_VNODE {
             var vnode = vnode_fdinfowithpath()
             let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
-            guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &vnode, size) == size else { continue }
+            guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDVNODEPATHINFO, &vnode, size) == size else { return nil }
             let path = withUnsafePointer(to: &vnode.pvip.vip_path) {
                 $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
             }
-            let name = (path as NSString).lastPathComponent
-            if name.hasPrefix("rollout-"), name.hasSuffix(".jsonl") { paths.insert(path) }
+            paths.insert(path)
         }
         return paths.sorted()
     }
