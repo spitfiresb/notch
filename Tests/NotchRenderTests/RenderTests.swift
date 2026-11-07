@@ -3,6 +3,8 @@ import SwiftUI
 import XCTest
 @testable import Notch
 
+// The render harness uses NowPlayingManager.debugSeed, available only in debug builds.
+#if DEBUG
 /// Offscreen render harness. Not assertions about pixels — it draws the notch
 /// in each dock and state to PNGs under `.build/renders/` so the layout can be
 /// eyeballed (and diffed) without a screen or a cursor.
@@ -286,3 +288,4 @@ final class RenderTests: XCTestCase {
         write(root(env), size: sz, name: "drag-right-landed")
     }
 }
+#endif

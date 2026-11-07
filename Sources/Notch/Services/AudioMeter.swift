@@ -43,6 +43,24 @@ final class AudioMeter: ObservableObject {
     // 30 Hz pull from main to read the snapshot and update @Published bars.
     private var pollTimer: Timer?
 
+    #if NOTCH_BENCHMARK
+    func benchmarkConfigure(sampleRate: Double) {
+        for (i, frequency) in Self.centerFrequencies.enumerated() {
+            biquads[i] = Biquad.bandpass(centerHz: frequency, q: 2.4, sampleRate: sampleRate)
+        }
+    }
+
+    func benchmarkProcess(_ samples: inout [Float], channels: Int, publish: Bool = true) {
+        precondition(channels > 0 && samples.count % channels == 0)
+        samples.withUnsafeMutableBytes { bytes in
+            var buffer = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(
+                mNumberChannels: UInt32(channels), mDataByteSize: UInt32(bytes.count), mData: bytes.baseAddress))
+            process(&buffer)
+        }
+        if publish { tick() }
+    }
+    #endif
+
     func start() {
         guard #available(macOS 14.2, *) else {
             NSLog("[AudioMeter] requires macOS 14.2+, skipping")

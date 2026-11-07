@@ -90,6 +90,17 @@ final class SpotifyLibrary: ObservableObject {
     }
 
     private var cache = CacheFile()
+    #if NOTCH_BENCHMARK
+    private var benchmarkFixtureOnly = false
+    /// In-memory fixture input; no keychain, network or personal cache access.
+    func benchmarkLoadCache(_ data: Data) throws {
+        benchmarkFixtureOnly = true
+        cache = try JSONDecoder().decode(CacheFile.self, from: data)
+        rebuildLookup()
+        state = .connected
+        trackChanged(membership.trackID)
+    }
+    #endif
     /// trackID → playlists containing it, rebuilt from `cache`.
     private var trackToPlaylists: [String: [PlaylistRef]] = [:]
     private var likedSet: Set<String> = []
@@ -357,6 +368,11 @@ final class SpotifyLibrary: ObservableObject {
     /// Refresh the playlist index. Cheap when nothing changed — playlists whose
     /// `snapshot_id` matches the cache aren't re-fetched.
     func sync(force: Bool = false) async {
+        #if NOTCH_BENCHMARK
+        // trackChanged schedules opportunistic refreshes, including for fixtures.
+        // Keep those tasks local; a fixture must never look up a real refresh token.
+        if benchmarkFixtureOnly { return }
+        #endif
         guard state == .connected, !isSyncing else { return }
         if !force, let last = lastSync, Date().timeIntervalSince(last) < 600 { return }
         isSyncing = true

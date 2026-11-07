@@ -72,6 +72,14 @@ final class NowPlayingManager: ObservableObject {
     }
 #endif
 
+    #if NOTCH_BENCHMARK
+    /// Exercise the real display-state update without contacting a media player.
+    func benchmarkReceive(_ value: NowPlayingInfo) {
+        info = value
+        syncDisplayState()
+    }
+    #endif
+
     func start() {
         mr.registerForNotifications { [weak self] in self?.refresh() }
         // Spotify announces every play/pause/track change via a distributed
