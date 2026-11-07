@@ -10,10 +10,14 @@ enum NotchDock: String, CaseIterable {
     private static let key = "notch.dock"
 
     static var stored: NotchDock {
-        NotchDock(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .top
+        load(from: .standard)
     }
 
-    func store() {
-        UserDefaults.standard.set(rawValue, forKey: Self.key)
+    static func load(from defaults: UserDefaults) -> NotchDock {
+        NotchDock(rawValue: defaults.string(forKey: key) ?? "") ?? .top
+    }
+
+    func store(in defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.key)
     }
 }

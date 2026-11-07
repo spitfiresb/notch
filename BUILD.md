@@ -8,13 +8,16 @@ This is a plain Swift Package — **no Xcode project**. Everything goes through 
 |--------------------|--------------|
 | `./build.sh`       | Compile and assemble `build/Notch.app` |
 | `./build.sh run`   | Compile, kill any running copy, and launch the app |
+| `./build.sh test` | Run Swift tests and offscreen render checks |
+| `./build.sh release` | Test, build optimized arm64 app, generate and verify a DMG + checksum |
+| `./build.sh verify FILE.dmg` | Mount and verify a packaged artifact without launching it |
 | `./build.sh kill`  | Quit the running app |
 | `./build.sh clean` | Remove `.build/` and `build/` |
 | `./build.sh logs`  | Tail the app's log file (`~/Library/Logs/Notch/notch.log`) |
 
 Add `CONFIG=release` for an optimized build, e.g. `CONFIG=release ./build.sh run`.
 
-The app has **no Dock icon and no menu bar item** (`LSUIElement`). After `run`, look at the top-centre of your screen — you'll see the black notch. Hover it to open; swipe horizontally with two fingers to switch tabs. There's no in-app quit — use `./build.sh kill`.
+The app has **no Dock icon and no menu bar item** (`LSUIElement`). After `run`, look at the top-centre of your screen — you'll see the black notch. Hover for controls, then click to expand; swipe horizontally with two fingers to switch tabs. Quit from Settings → About & support, or use `./build.sh kill`. Reopening the installed app brings up Settings.
 
 ## When you must open Xcode
 
@@ -94,6 +97,10 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
   `com.apple.screencapture.location` routing to `~/Pictures/Screenshots`.
 - `Services/DebugLog.swift` — `notchLog` helper; writes `~/Library/Logs/Notch/notch.log` (`./build.sh logs`).
 
+## Whole-app performance
+
+Run `./scripts/benchmark-notch.sh` for the optimized fixture suite and combined soak (Claude excluded). Use `--samples 30 --soak-seconds 60` for a longer run. It snapshots sources, retains raw metrics/render captures, and reports live checks as untested. See [whole-app benchmark protocol](docs/notch-performance.md) for coverage, budgets, and `sample-notch.sh` live CPU/memory collection.
+
 ## Debugging Claude sessions
 
 - Events land in `~/Library/Application Support/Notch/claude-events.jsonl`; every one is also
@@ -102,8 +109,19 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
   made-up pid (e.g. `"pid":99999`) to the spool, then a `SessionEnd` line to clear the row.
 - Toast variants (`SessionToast.Kind`): complete, permission, question, failed. Attention
   callbacks are muted during the launch replay so a backlog doesn't fire a burst of toasts.
-- Claude Code hot-reloads hooks, so toggling the Settings switch affects sessions that are
-  already running.
+- Claude monitoring starts before hook setup. Malformed/unreadable settings do not stop the
+  spool reader or independent transcript reader. Setup/cleanup failures retry every 30 seconds.
+  Existing settings bytes are backed up before valid edits; malformed data is never replaced.
+- `ClaudeSessionMonitor.swift` follows exact session IDs from hooks, open transcript/debug files,
+  or process arguments, with bounded 2 MiB incremental reads and silent initial replay. It
+  retains readers across temporary discovery failures and handles transcript inode replacement.
+  It does not guess session identity by choosing the newest chat in a shared project directory.
+- A process without readable session evidence shows `detecting`; discovery continues automatically.
+  Permission/subagent detail still relies on hooks. A silent process is not proof of a completed
+  or interrupted turn, so the previous network-traffic heuristic is no longer used.
+- `ClaudeReliabilityTests.swift` covers configuration preservation/backups, retry recovery,
+  shell quoting, transcript replay/replacement, exact descriptor discovery, fallback arbitration,
+  explicit interruption, and process-only rows. Tests use temporary settings, not personal files.
 - The README's Claude captures (`docs/assets/claude-*.png`, `clawd-*.gif`) are real: the
   stills are `screencapture -R` of the notch region (the panel sits at x≈570, 300 pt wide)
   with a live session, and the GIFs are `screencapture -V` recordings cut with ffmpeg while
@@ -111,11 +129,24 @@ CPU burst right after `./build.sh run` is the scanner, not the app.
 
 ## Debugging Codex sessions
 
+- Performance: run `./scripts/benchmark-codex.sh` for an opt-in release benchmark of discovery, idle/active scans, heavy output and bounded replay. See [benchmark methodology and metrics](docs/codex-performance.md); JSON reports go to `.build/benchmarks/`.
 - Claude and Codex monitoring default to on; explicit opt-outs remain off. Codex discovery does not require hooks, trust changes, shell configuration, or restarting existing terminal sessions.
 - `CodexSessionMonitor.swift` uses libproc to enumerate native Codex processes and their open `rollout-*.jsonl` file descriptors. It reads metadata and a bounded 2 MiB tail on initial discovery, then only appended bytes. Discovery and parsing run on a serial utility queue every second, outside the UI thread.
 - Each rollout maps to its actual owning PID. Multiple terminals in the same cwd remain separate. When a CLI retains older rollout descriptors after a resume, only its most recently modified root rollout is shown. Subagent metadata is excluded. Closed files/processes remove their rows; transient fd-inspection failures retain existing rows.
 - `task_started`, tool call/result records, `task_complete`, and `turn_aborted` feed the shared state machine. Initial replay is silent. Turn IDs prevent stale completions and late tool results from reviving an interrupted turn. `CodexContext` and `CodexPrompt` are internal normalized events, not Codex hooks.
 - `CodexHooks.swift` remains for migration cleanup and tests. On startup Notch removes only its own old entries from `hooks.json`; it does not write trust records or alter other hooks/configuration. Monitoring proceeds even if cleanup fails.
-- `swift test --filter 'CodexRolloutTests|CodexSessionTests|CodexHooksTests|SessionSpoolTests|InterruptDetectionTests'` covers real rollout shapes, bounded/silent initial replay, partial/malformed lines, file-descriptor discovery, same-folder sessions, resuming, cleanup, interruption, and Claude regression checks.
-- Live verification: launch Notch while Codex CLI is already running. Inspect `sessions:` entries in `~/Library/Logs/Notch/notch.log` for resolved Codex PIDs and terminal TTYs; send a prompt and check the mint indicator and completion toast. No `/hooks` step should be needed.
+- `swift test --filter 'ClaudeHooksTests|ClaudeTranscriptTests|SessionRecoveryTests|CodexRolloutTests|CodexSessionTests|CodexHooksTests|SessionSpoolTests|InterruptDetectionTests'` covers real rollout shapes, bounded/silent initial replay, partial/malformed lines, file-descriptor discovery, same-folder sessions, resuming, cleanup, interruption, and Claude regression checks.
+- Live verification: launch Notch while Codex CLI is already running. Inspect the sessions panel and operational `sessions:` entries in `~/Library/Logs/Notch/notch.log`; send a prompt and check the mint indicator and completion toast. No `/hooks` step should be needed.
 - Compatibility: verified against native CLI 0.153.4. The local rollout schema is an implementation detail, so future versions require compatibility checks. Clients that do not hold a readable rollout open are not detected. Permission dialogs, compaction progress, and subagent counts are not guaranteed by the rollout format; terminal multiplexers and exact desktop-thread focus remain limited.
+
+## Release builds
+
+See [PUBLISH.md](PUBLISH.md) for the build pipeline and manual acceptance matrix.
+Version/build live in `Resources/Info.plist`. The app icon is original vector
+artwork rendered by `scripts/generate-icon.swift`; all sizes are bundled in an
+ICNS. Release builds target arm64 and macOS 14.2. Packaging checks the executable's
+actual deployment target against the plist.
+
+New logs omit session text and Spotify credentials and rotate during use.
+Do not attach old development logs without reviewing them. Privacy, local data
+and uninstall instructions are in [PRIVACY.md](PRIVACY.md).

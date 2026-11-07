@@ -44,7 +44,13 @@ final class BoundedLog: @unchecked Sendable {
     }
 }
 
+#if NOTCH_BENCHMARK
+private let log = BoundedLog(url: URL(fileURLWithPath:
+    ProcessInfo.processInfo.environment["NOTCH_BENCHMARK_LOG"]
+        ?? NSTemporaryDirectory() + "notch-benchmark-\(ProcessInfo.processInfo.processIdentifier).log"))
+#else
 private let log = BoundedLog(url: FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/Notch/notch.log"))
+#endif
 
 func notchLog(_ message: String) { log.append(message) }

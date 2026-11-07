@@ -201,8 +201,14 @@ final class NotchState: ObservableObject {
 
     /// Which screen edge the notch is docked to. Set by dragging the blob
     /// (NotchDragController), persisted across launches.
-    @Published var dock: NotchDock = NotchDock.stored {
-        didSet { dock.store() }
+    @Published var dock: NotchDock {
+        didSet { dock.store(in: defaults) }
+    }
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        dock = NotchDock.load(from: defaults)
     }
     /// True from the moment a drag tears the blob off its edge until the
     /// button is released: the blob is a droplet riding `dragCursor`, the

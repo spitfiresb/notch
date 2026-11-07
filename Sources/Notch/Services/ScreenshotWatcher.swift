@@ -89,6 +89,14 @@ final class ScreenshotWatcher: ObservableObject {
         while inFlight || dirty { try? await Task.sleep(nanoseconds: 1_000_000) }
     }
 
+    #if NOTCH_BENCHMARK
+    func benchmarkScan(initial: Bool = false) async {
+        if !running { running = true }
+        requestScan(force: true)
+        await waitUntilIdle()
+    }
+    #endif
+
     private func requestScan(force: Bool) {
         guard running else { return }
         dirty = true; forceNext = forceNext || force
