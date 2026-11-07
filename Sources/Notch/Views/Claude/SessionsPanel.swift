@@ -35,6 +35,7 @@ extension AgentSession.State {
     var color: Color {
         switch self {
         case .idle:       .white.opacity(0.35)
+        case .unknown:    .white.opacity(0.55)
         case .thinking:   ClaudeSpinner.orange
         case .tool:       ClaudeSpinner.orange
         case .compacting: Color(red: 0.75, green: 0.55, blue: 1.0)
@@ -46,6 +47,7 @@ extension AgentSession.State {
     var label: String {
         switch self {
         case .idle:       "idle"
+        case .unknown:    "detecting"
         case .thinking:   "thinking"
         case .tool:       "working"
         case .compacting: "compacting"

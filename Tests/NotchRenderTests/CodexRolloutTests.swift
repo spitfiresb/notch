@@ -136,4 +136,27 @@ final class CodexRolloutTests: XCTestCase {
         try data.write(to: url)
         XCTAssertNil(CodexRolloutReader(path: url.path, pid: getpid()))
     }
+    func testInspectionFailureStillReadsKnownRollout() throws {
+        let (url, _) = try fixture()
+        var inspectable = true
+        let monitor = CodexSessionMonitor(processes: { [(101, "/tmp/project")] }, openPaths: { _ in inspectable ? [url.path] : nil })
+        _ = monitor.scan()
+        inspectable = false
+        let file = try FileHandle(forWritingTo: url)
+        try file.seekToEnd()
+        var data = try JSONSerialization.data(withJSONObject: record("event_msg", ["type": "task_started", "turn_id": "new"]))
+        data.append(10)
+        try file.write(contentsOf: data); try file.close()
+        XCTAssertEqual(monitor.scan().first?.payload["hook_event_name"] as? String, "UserPromptSubmit")
+    }
+
+    func testNoReadableRolloutShowsDetectingAndRecovers() throws {
+        let (url, _) = try fixture()
+        var paths: [String]? = nil
+        let monitor = CodexSessionMonitor(processes: { [(101, "/tmp/project")] }, openPaths: { _ in paths })
+        XCTAssertEqual(monitor.scan().first?.payload["hook_event_name"] as? String, "SessionObserved")
+        paths = [url.path]
+        XCTAssertTrue(monitor.scan().contains { $0.payload["hook_event_name"] as? String == "SessionStart" })
+    }
+
 }

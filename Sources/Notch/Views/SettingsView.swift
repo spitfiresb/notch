@@ -47,10 +47,13 @@ struct SettingsView: View {
                 Toggle(isOn: $settings.claudeSessionsEnabled) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Show live Claude Code sessions")
-                        Text("Adds hook entries to ~/.claude/settings.json so each session reports what it's doing. Sessions already running pick this up on their next restart.")
+                        Text("Automatically follows local Claude Code activity. Adds event hooks when possible for permission prompts and other details.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                }
+                if let status = agents.integrationErrors[.claude] {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Claude Code")

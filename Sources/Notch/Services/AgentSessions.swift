@@ -14,6 +14,8 @@ struct AgentSession: Identifiable, Equatable {
     enum State: Equatable {
         /// Waiting for the user to type a prompt.
         case idle
+        /// Process exists, but readable lifecycle evidence has not arrived yet.
+        case unknown
         /// Model is generating (between prompt/tool-result and the next tool call or stop).
         case thinking
         /// A tool is executing.
@@ -90,8 +92,8 @@ struct AgentSession: Identifiable, Equatable {
     }
     var needsAttention: Bool { state == .waiting || state == .failed }
     var isBusy: Bool { state == .thinking || state == .tool || state == .compacting }
-    /// An unfinished turn, including one paused for user input.
-    var isActive: Bool { isBusy || state == .waiting }
+    /// A live row: unfinished turn, user-input wait, or a process awaiting readable activity.
+    var isActive: Bool { isBusy || state == .waiting || state == .unknown }
 
     /// Pin this session to its `claude` process and derive tty / host from it.
     mutating func attach(pid claude: pid_t) {
@@ -121,14 +123,19 @@ final class AgentSessionStore: ObservableObject {
     private var spools: [AgentProvider: SessionEventSpool] = [:]
     private var enabledProviders = Set<AgentProvider>()
     private var codexMonitor: CodexSessionMonitor?
+    private var claudeMonitor: ClaudeSessionMonitor?
+    private let claudeHooks: ClaudeHooks
+    private var lastClaudeHook: [String: Date] = [:]
+    private var pendingClaudeHookSetup = false
     private var livenessTimer: Timer?
     private var tick = 0
-    private let network = NetworkActivityMonitor()
     private let resolveAncestor: (pid_t, AgentProvider) -> pid_t?
     private let processes: (AgentProvider) -> [(pid: pid_t, cwd: String)]
 
     init(resolveAncestor: @escaping (pid_t, AgentProvider) -> pid_t? = { Proc.findAgentAncestor(of: $0, provider: $1) },
-         processes: @escaping (AgentProvider) -> [(pid: pid_t, cwd: String)] = { Proc.agentProcesses(provider: $0) }) {
+         processes: @escaping (AgentProvider) -> [(pid: pid_t, cwd: String)] = { Proc.agentProcesses(provider: $0) },
+         claudeHooks: ClaudeHooks = .current) {
+        self.claudeHooks = claudeHooks
         self.resolveAncestor = resolveAncestor
         self.processes = processes
     }
@@ -164,9 +171,12 @@ final class AgentSessionStore: ObservableObject {
                 guard let self else { return }
                 for spool in self.spools.values { spool.readNew() }
                 self.codexMonitor?.poll()
+                self.claudeMonitor?.poll()
                 self.tick += 1
                 self.detectInterrupts()
-                self.detectSilentInterrupts()
+                if self.tick % 30 == 0 && self.pendingClaudeHookSetup {
+                    self.updateClaudeHooks(enabled: self.enabledProviders.contains(.claude))
+                }
                 if self.tick % 3 == 0 { self.reapDead() }
             }
         }
@@ -179,7 +189,10 @@ final class AgentSessionStore: ObservableObject {
         spools.removeAll()
         codexMonitor?.stop()
         codexMonitor = nil
-        network.watch([])
+        claudeMonitor?.stop()
+        claudeMonitor = nil
+        enabledProviders.removeAll()
+        lastClaudeHook.removeAll()
     }
 
     func setHooksEnabled(_ enabled: Bool, provider: AgentProvider = .claude) {
@@ -214,44 +227,94 @@ final class AgentSessionStore: ObservableObject {
             monitor.poll()
             return
         }
-        do {
-            let ok = enabled ? ClaudeHooks.install() : ClaudeHooks.uninstall()
-            guard ok else { throw CocoaError(.fileWriteUnknown) }
-            let url = ClaudeHooks.spoolURL
-            integrationErrors.removeValue(forKey: provider)
-            guard enabled else { return }
-            enabledProviders.insert(provider)
-            if spools[provider] == nil {
-                let spool = SessionEventSpool(url: url)
-                spool.onEvent = { [weak self] event, date, pid, replaying in
-                    guard let self, self.enabledProviders.contains(provider) else { return }
-                    self.apply(event, at: date, hookParent: pid, provider: provider, replaying: replaying)
+        if !enabled {
+            claudeMonitor?.stop()
+            claudeMonitor = nil
+            lastClaudeHook.removeAll()
+        } else {
+            enabledProviders.insert(.claude)
+            if claudeMonitor == nil {
+                let monitor = ClaudeSessionMonitor(processes: { [processes] in processes(.claude) })
+                monitor.onEvents = { [weak self] events in
+                    guard let self, self.enabledProviders.contains(.claude) else { return }
+                    for event in events { self.applyClaudeTranscript(event) }
                 }
-                spools[provider] = spool
-                spool.start()
-                reapDead()
+                claudeMonitor = monitor
             }
-        } catch {
-            integrationErrors[provider] = "Could not update \(provider.label) hooks: \(error.localizedDescription)"
-            notchLog("sessions: \(provider.rawValue) hook setup failed: \(error)")
+            // Start observing first. Hook setup failure must never disable monitoring.
+            _ = claudeHooks.ensureScript()
+            if spools[.claude] == nil {
+                let spool = SessionEventSpool(url: claudeHooks.spoolURL)
+                spool.onEvent = { [weak self] event, date, pid, replaying in
+                    guard let self, self.enabledProviders.contains(.claude) else { return }
+                    self.apply(event, at: date, hookParent: pid, provider: .claude, replaying: replaying)
+                }
+                spools[.claude] = spool
+                spool.start()
+            }
+            claudeMonitor?.poll()
         }
+        updateClaudeHooks(enabled: enabled)
+    }
+
+    func updateClaudeHooks(enabled: Bool) {
+        do {
+            try claudeHooks.setEnabled(enabled)
+            pendingClaudeHookSetup = false
+            integrationErrors.removeValue(forKey: .claude)
+        } catch {
+            pendingClaudeHookSetup = true
+            // Informational status: the independent reader remains active and setup retries.
+            integrationErrors[.claude] = enabled
+                ? "Using local session activity. Detailed event setup will retry automatically; your Claude settings are untouched."
+                : "Monitoring is off. Hook cleanup will retry automatically; your Claude settings are untouched."
+        }
+    }
+
+    func applyClaudeTranscript(_ event: ClaudeSessionMonitor.Event) {
+        guard let id = event.payload["session_id"] as? String else { return }
+        let key = "claude:" + id
+        if event.payload["hook_event_name"] as? String != "SessionEnd" {
+            // Shell hook timestamps have one-second precision. Hooks win overlapping records,
+            // especially permission waits whose tool_use record describes the preceding request.
+            if let hook = lastClaudeHook[key], event.date.timeIntervalSince1970 < floor(hook.timeIntervalSince1970) + 1 { return }
+            if let existing = byID[key], event.date < existing.lastEventAt { return }
+        }
+        apply(event.payload, at: event.date, hookParent: event.pid, provider: .claude,
+              replaying: event.replaying, fromTranscript: true)
     }
 
     // MARK: Event folding
 
     func apply(_ e: [String: Any], at ts: Date, hookParent: pid_t?,
-               provider: AgentProvider = .claude, replaying: Bool = false) {
+               provider: AgentProvider = .claude, replaying: Bool = false, fromTranscript: Bool = false) {
         guard let sessionID = e["session_id"] as? String, !sessionID.isEmpty,
               let name = e["hook_event_name"] as? String else { return }
-        guard (provider == .claude ? ClaudeHooks.events : CodexHooks.events + ["CodexContext", "CodexPrompt"]).contains(name) else { return }
+        guard (provider == .claude ? ClaudeHooks.events + ["Interrupt", "ClaudeActivity", "SessionObserved"] : CodexHooks.events + ["CodexContext", "CodexPrompt", "SessionObserved"]).contains(name) else { return }
         let id = provider.rawValue + ":" + sessionID
+        if name == "SessionObserved", let pid = hookParent {
+            guard !byID.values.contains(where: { $0.provider == provider && $0.pid == pid }) else { return }
+            var observed = AgentSession(sessionID: sessionID, provider: provider,
+                                        cwd: e["cwd"] as? String ?? "", lastEventAt: ts, startedAt: ts)
+            observed.attach(pid: pid)
+            observed.state = .unknown
+            observed.activity = "Waiting for session activity…"
+            byID[id] = observed
+            publish()
+            return
+        }
         let cwd = e["cwd"] as? String ?? ""
+        if provider == .claude && !fromTranscript {
+            if let current = byID[id], floor(ts.timeIntervalSince1970) < floor(current.lastEventAt.timeIntervalSince1970) { return }
+            lastClaudeHook[id] = ts
+        }
 
         if name == "SessionEnd" {
             let reason = e["session_end_reason"] as? String ?? ""
             // `clear`/`resume` end the transcript but the process lives on and
             // will fire a fresh SessionStart with a new id. Drop this one.
             byID.removeValue(forKey: id)
+            lastClaudeHook.removeValue(forKey: id)
             notchLog("sessions: end \(id.prefix(8)) (\(reason))")
             publish()
             return
@@ -278,10 +341,16 @@ final class AgentSessionStore: ObservableObject {
         if let hp = hookParent, let claude = resolveAncestor(hp, provider), claude != s.pid {
             s.attach(pid: claude)
         } else if s.pid == nil || !Proc.isAlive(s.pid!) {
-            let claimed = Set(byID.values.filter { $0.id != id }.compactMap(\.pid))
+            let claimed = Set(byID.values.filter { $0.id != id && !$0.sessionID.hasPrefix("process:") }.compactMap(\.pid))
             // Folder matching cannot identify a Codex thread in a shared app server.
-            if provider == .claude, let p = processes(provider).first(where: { $0.cwd == s.cwd && !claimed.contains($0.pid) }) {
-                s.attach(pid: p.pid)
+            if provider == .claude {
+                let matches = processes(provider).filter { $0.cwd == s.cwd && !claimed.contains($0.pid) }
+                if matches.count == 1 { s.attach(pid: matches[0].pid) }
+            }
+        }
+        if let pid = s.pid {
+            byID = byID.filter { key, value in
+                !(key != id && value.provider == provider && value.pid == pid && value.sessionID.hasPrefix("process:"))
             }
         }
         // Claude uses one process per session. A `/clear` or resume hands the same
@@ -296,6 +365,9 @@ final class AgentSessionStore: ObservableObject {
             s.branch = Git.branch(at: s.cwd)
         }
 
+        if provider == .claude, !fromTranscript, let path = s.transcriptPath, let pid = s.pid {
+            claudeMonitor?.observe(.init(sessionID: sessionID, path: path, pid: pid, cwd: s.cwd))
+        }
         let previous = s.state
         switch name {
         case "SessionStart":
@@ -303,6 +375,8 @@ final class AgentSessionStore: ObservableObject {
             let reason = e["session_start_reason"] as? String ?? e["source"] as? String ?? ""
             // A compaction restart keeps the turn running; everything else is a fresh idle.
             if reason != "compact" { s.state = .idle; s.activity = nil; s.attention = nil }
+        case "ClaudeActivity":
+            if s.state != .waiting { s.state = .thinking; s.activity = nil }
         case "CodexPrompt":
             s.lastPrompt = Self.snippet(e["prompt"] as? String)
         case "UserPromptSubmit":
@@ -327,8 +401,9 @@ final class AgentSessionStore: ObservableObject {
             s.attention = nil
             s.activity = Self.describeTool(name: e["tool_name"] as? String,
                                            input: e["tool_input"] as? [String: Any])
-            if provider == .codex,
-               ["request_user_input", "request_user_input_async"].contains(e["tool_name"] as? String ?? "") {
+            let toolName = e["tool_name"] as? String ?? ""
+            if (provider == .codex && ["request_user_input", "request_user_input_async"].contains(toolName))
+                || (provider == .claude && toolName == "AskUserQuestion") {
                 s.state = .waiting
                 s.waitingReason = .question
                 let questions = (e["tool_input"] as? [String: Any])?["questions"] as? [[String: Any]]
@@ -336,12 +411,18 @@ final class AgentSessionStore: ObservableObject {
                                           ?? questions?.first?["title"] as? String) ?? "Needs your input"
             }
         case "PostToolUse", "PostToolUseFailure":
+            if name == "PostToolUseFailure", e["is_interrupt"] as? Bool == true {
+                s.state = .done
+                s.activity = nil; s.attention = nil; s.waitingReason = nil
+                s.turnEndedAt = ts; s.interruptedAt = ts; s.lastReply = "Interrupted"
+                break
+            }
             if let t = s.interruptedAt, ts.timeIntervalSince(t) < Self.interruptHookGrace { break }
             s.interruptedAt = nil
             s.state = .thinking
             s.attention = nil
             s.waitingReason = nil
-            if name == "PostToolUseFailure", let err = e["tool_error"] as? String {
+            if name == "PostToolUseFailure", let err = e["tool_error"] as? String ?? e["error"] as? String {
                 s.activity = "⚠︎ \(Self.snippet(err, max: 60) ?? "tool failed")"
             } else {
                 s.activity = nil
@@ -353,7 +434,7 @@ final class AgentSessionStore: ObservableObject {
                                                                input: e["tool_input"] as? [String: Any]) ?? "tool")
         case "Notification":
             let type = e["notification_type"] as? String ?? ""
-            let msg = e["notification_message"] as? String ?? e["notification_title"] as? String
+            let msg = e["message"] as? String ?? e["notification_message"] as? String ?? e["notification_title"] as? String
             switch type {
             case "permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input":
                 s.state = .waiting
@@ -390,7 +471,7 @@ final class AgentSessionStore: ObservableObject {
             s.state = .done
             s.activity = nil
             s.turnEndedAt = ts
-            s.lastReply = Self.snippet(e["last_assistant_message"] as? String, max: 140)
+            s.lastReply = Self.snippet(e["last_assistant_message"] as? String, max: 140) ?? s.lastReply
         case "StopFailure":
             s.state = .failed
             s.activity = nil
@@ -412,7 +493,7 @@ final class AgentSessionStore: ObservableObject {
         }
 
         byID[id] = s
-        notchLog("sessions: \(name) \(s.projectName) id=\(id.prefix(8)) pid=\(s.pid.map(String.init) ?? "?") tty=\(s.tty ?? "?") state=\(s.state) \(s.activity ?? s.attention ?? "")")
+        notchLog("sessions: \(name) state=\(s.state)")
         publish()
         // No nudge for a turn the user cut short themselves.
         if !replaying, s.state != previous, s.interruptedAt == nil,
@@ -436,50 +517,6 @@ final class AgentSessionStore: ObservableObject {
     /// How long after an interrupt call tool hooks from the old turn are ignored.
     private static let interruptHookGrace: TimeInterval = 3
 
-    /// Ctrl-C while the model is still thinking — before it has produced any
-    /// output — writes nothing to the transcript and fires no hook, so
-    /// `detectInterrupts` can't see it. The wire can: a turn in flight is an
-    /// open API stream delivering bytes every second, and aborting closes it.
-    /// Sessions waiting on the model whose process has gone quiet for a few
-    /// seconds have no turn any more. (Tool phases are exempt — a long `bash`
-    /// is silent on the network by nature — and are covered by the transcript
-    /// path, since a tool interrupt is recorded there.)
-    private static let silenceWindow: TimeInterval = 6
-    /// Below this many inbound bytes over `silenceWindow` counts as silence.
-    /// Measured: a live stream never delivered less than 2.4 KB in any 6 s
-    /// window (tokens or pings); an idle `claude` never more than 750 B (the
-    /// odd keepalive). 4 s windows overlapped (940 B vs 740 B) and misfired.
-    private static let silenceBytes: UInt64 = 1200
-    /// Don't judge a session until its last hook event is this old — a fresh
-    /// prompt or tool result takes a moment to turn into a request.
-    private static let settleAfterEvent: TimeInterval = 5
-
-    private func detectSilentInterrupts() {
-        // Keep the counters running for every busy session (tool phases
-        // included, so a session that flips tool -> thinking already has a
-        // full window of history to judge); only sessions waiting on the
-        // model are judged.
-        network.watch(Set(byID.values.filter { $0.provider == .claude && $0.isBusy }.compactMap(\.pid)))
-        let waiting = byID.values.filter { $0.provider == .claude && ($0.state == .thinking || $0.state == .compacting) && $0.pid != nil }
-        let now = Date()
-        var changed = false
-        for s in waiting {
-            guard let pid = s.pid, now.timeIntervalSince(s.lastEventAt) >= Self.settleAfterEvent,
-                  let bytes = network.bytesIn(pid, over: Self.silenceWindow, now: now),
-                  bytes < Self.silenceBytes else { continue }
-            var u = s
-            u.state = .done
-            u.activity = nil
-            u.turnEndedAt = now
-            u.interruptedAt = now
-            u.lastReply = "Interrupted"
-            byID[s.id] = u
-            changed = true
-            notchLog("sessions: interrupted \(u.projectName) id=\(s.id.prefix(8)) — \(bytes) B in over \(Int(Self.silenceWindow)) s, no stream")
-        }
-        if changed { publish() }
-    }
-
     private func detectInterrupts() {
         var changed = false
         let now = Date()
@@ -498,7 +535,7 @@ final class AgentSessionStore: ObservableObject {
             u.lastReply = "Interrupted"
             byID[id] = u
             changed = true
-            notchLog("sessions: interrupted \(u.projectName) id=\(id.prefix(8))")
+            notchLog("sessions: interrupted")
         }
         transcriptSizes = transcriptSizes.filter { byID[$0.key] != nil }
         // No `onAttention` here: the user interrupted it themselves, no toast needed.
@@ -616,7 +653,7 @@ final class AgentSessionStore: ObservableObject {
               let host = Proc.hostApplication(of: pid) else { return }
         let bundle = host.bundleIdentifier ?? ""
         let ttyPath = session.tty.map { "/dev/\($0)" }
-        notchLog("sessions: focus \(session.projectName) host=\(bundle) tty=\(ttyPath ?? "-")")
+        notchLog("sessions: focus host=\(bundle)")
 
         if bundle == "com.apple.Terminal", let ttyPath {
             let hit = AppleScript.run("""
@@ -695,6 +732,36 @@ enum Proc {
         }
     }
 
+    static func arguments(_ pid: pid_t) -> [String] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, UInt32(mib.count), nil, &size, nil, 0) == 0,
+              size > MemoryLayout<Int32>.size, size < 4 * 1024 * 1024 else { return [] }
+        var bytes = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, UInt32(mib.count), &bytes, &size, nil, 0) == 0 else { return [] }
+        let argc = bytes.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        guard argc > 0, argc < 4096 else { return [] }
+        var index = MemoryLayout<Int32>.size
+        while index < size && bytes[index] != 0 { index += 1 } // executable path
+        while index < size && bytes[index] == 0 { index += 1 }
+        var arguments: [String] = []
+        for _ in 0..<argc {
+            guard index < size else { break }
+            let start = index
+            while index < size && bytes[index] != 0 { index += 1 }
+            arguments.append(String(decoding: bytes[start..<index], as: UTF8.self))
+            index += 1
+        }
+        return arguments
+    }
+
+    static func isAgentProcess(_ pid: pid_t, provider: AgentProvider) -> Bool {
+        let executable = path(pid)
+        if isAgentExecutable(executable, provider: provider) { return true }
+        guard provider == .claude, (executable as NSString).lastPathComponent == "node" else { return false }
+        return arguments(pid).prefix(3).contains { $0.contains("/@anthropic-ai/claude-code/") && $0.hasSuffix(".js") }
+    }
+
     /// Every running native `claude` process with its cwd. ~1 ms; call sparingly.
     static func agentProcesses(provider: AgentProvider) -> [(pid: pid_t, cwd: String)] {
         let count = proc_listallpids(nil, 0)
@@ -702,7 +769,7 @@ enum Proc {
         var pids = [pid_t](repeating: 0, count: Int(count) + 64)
         let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
         var out: [(pid: pid_t, cwd: String)] = []
-        for pid in pids.prefix(Int(max(0, n))) where pid > 0 && isAgentExecutable(path(pid), provider: provider) {
+        for pid in pids.prefix(Int(max(0, n))) where pid > 0 && isAgentProcess(pid, provider: provider) {
             out.append((pid, cwd(of: pid)))
         }
         return out
@@ -710,10 +777,8 @@ enum Proc {
 
     /// Walk up from the hook process (its `$PPID` — usually claude itself) to
     /// the `claude` process that spawned it.
-    /// Can't match on `p_comm`: the native CLI sets it to its version string
-    /// ("2.1.241"), so match the executable name (claude / node for the npm
-    /// install) and otherwise take the first non-shell ancestor — the hook is
-    /// spawned either directly by claude or through one `sh -c`.
+    /// Match native executable paths or verified npm CLI arguments. Never attach
+    /// a hook to an unrelated Node process or a shell whose PID has been reused.
     static func isAgentExecutable(_ full: String, provider: AgentProvider) -> Bool {
         if provider == .claude { return isClaudeExecutable(full) }
         let exe = (full as NSString).lastPathComponent
@@ -738,8 +803,8 @@ enum Proc {
             let full = path(i.pid)
             let exe = (full as NSString).lastPathComponent
             // Native install lives at ~/.local/share/claude/versions/<ver>.
-            if exe == "node" || isClaudeExecutable(full) { return i.pid }
-            if !shells.contains(exe), !shells.contains(i.comm) { return i.pid }
+            if isAgentProcess(i.pid, provider: .claude) { return i.pid }
+            if !shells.contains(exe), !shells.contains(i.comm) { return nil }
             cur = i.ppid
         }
         return nil
@@ -811,7 +876,7 @@ enum AppleScript {
         var error: NSDictionary?
         guard let script = NSAppleScript(source: source) else { return nil }
         let result = script.executeAndReturnError(&error)
-        if let error { notchLog("applescript: \(error)"); return nil }
+        if let error { notchLog("applescript: failed (\(error[NSAppleScript.errorNumber] ?? "unknown"))"); return nil }
         return result.stringValue ?? (result.booleanValue ? "true" : "false")
     }
 }
