@@ -1,0 +1,45 @@
+NOTCH — INSTALLATION
+
+Requires an Apple Silicon Mac (M1 or later), macOS 14.2 or later.
+Xcode, Homebrew and a paid Notch account are not needed.
+
+1. Drag Notch.app onto the Applications shortcut in this disk image.
+2. Eject the disk image.
+3. Open Notch from Applications. Setup appears on the first launch.
+4. Hover over the pill at the screen's edge for playback controls; click to
+   expand it. The gear opens Settings. There is no Dock or menu-bar icon.
+   Open Notch from Applications again if you need to find Settings.
+
+This preview is ad-hoc signed, not notarized. macOS may block the first open.
+If you trust the source: try opening the installed app, then open System
+Settings > Privacy & Security > Open Anyway. Follow macOS's confirmation.
+Do not disable Gatekeeper or other system protections.
+Apple's guide: https://support.apple.com/en-us/102445
+
+Accessibility helps interaction and selecting session windows. Spotify
+Automation and system-audio capture are optional. Setup can be skipped and
+reopened from Settings. Permission grants may need renewing after updates.
+
+Settings > General > Launch at login is opt-in.
+Claude Code and Codex session monitoring are on by default. Claude monitoring
+adds Notch-only entries to your local Claude settings; both can be disabled
+in Settings. See PRIVACY.txt for local storage and networking details.
+
+Spotify Library is optional and requires your own Spotify developer app.
+Core playback controls and the rest of Notch do not need that setup.
+
+UPDATES
+Quit Notch using Settings, replace Applications/Notch.app with the new version,
+and reopen it. Settings > About & support > Releases & updates opens releases.
+There is no automatic updater.
+
+UNINSTALL
+Before deleting the app: turn off launch at login and both session integrations,
+disconnect Spotify, and turn off screenshot routing if you enabled it. Then
+quit and move Notch.app to Trash. Screenshots themselves are never deleted.
+See https://github.com/spitfiresb/notch/blob/main/PRIVACY.md for optional cleanup.
+
+SUPPORT
+https://github.com/spitfiresb/notch/issues
+Include the version and macOS version (Settings > Copy app info), what happened,
+and how to reproduce it. Review screenshots and logs before sharing them.

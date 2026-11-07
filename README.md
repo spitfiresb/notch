@@ -114,7 +114,7 @@ Run `claude` in a few terminals and you end up alt-tabbing to see which one is s
 
 Session states, as the panel shows them: `idle` → `thinking` → `working` (tool call) → `done` / `failed`, with `needs you` for permission prompts and questions, and `compacting` while the context is being compacted. Subagents show up as an `N agents` count on the parent row. `/clear` and `--resume` hand the same process a new session id; the old row is replaced, not duplicated.
 
-Everything happens in the notch: no extra tab, no window, no daemon. Turn it on from Settings → Claude Code; see [Getting started](#getting-started) for what that changes.
+Everything happens in the notch: no extra tab, no window, no daemon. Control monitoring from Settings → Claude Code; see [Getting started](#getting-started) for what that changes.
 
 ### Live Codex sessions
 
@@ -134,7 +134,7 @@ Layouts for every dock and state can be rendered offscreen with `swift test` (PN
 
 ### Stays out of the way
 
-No Dock icon, no menu bar item. It pins itself across every Space (including full-screen apps), ducks off-screen when Mission Control or App Exposé takes over, and launches at login (toggleable in Settings). Switch to the Screenshots tab and it stays your tab for 30 seconds of inactivity before reverting to Music.
+No Dock icon, no menu bar item. It pins itself across every Space (including full-screen apps), ducks off-screen when Mission Control or App Exposé takes over, and can launch at login when enabled in Settings. Switch to the Screenshots tab and it stays your tab for 30 seconds of inactivity before reverting to Music.
 
 ## Why it's interesting under the hood
 
@@ -144,17 +144,34 @@ This is not a menu-bar-app template. A few of the problems it solves:
 
 **Real-time audio analysis on a budget.** macOS 14.2's `AudioHardwareCreateProcessTap` provides a public way to tap the system mixdown. The tap runs six direct-form-I biquads per sample on the realtime IO thread, publishes RMS-per-band through a lock-protected snapshot, and a 60 Hz main-thread tick shapes it through per-band dB windows and asymmetric envelope followers. The result: bars that visibly *travel* instead of teleporting.
 
-**Costing nothing at idle.** Every loop in the app is gated or event-driven: the audio tap exists only while music plays, hover detection rides mouse-moved events instead of a poll, UI publishes are skipped when nothing visibly changed, and Spotify updates arrive via distributed notification. Idle CPU is ~0% (down from ~15% in an earlier naive version; see [PR #1](https://github.com/spitfiresb/notch/pull/1) for the hunt).
+**Costing nothing at idle.** Every loop in the app is gated or event-driven: the audio tap exists only while music plays, hover detection rides mouse-moved events instead of a poll, UI publishes are skipped when nothing visibly changed, and Spotify updates arrive via distributed notification. Earlier music-only measurements showed idle CPU near 0% (down from ~15%; agent monitoring adds work, so measure your configuration; see [PR #1](https://github.com/spitfiresb/notch/pull/1) for the hunt).
 
 **A Spotify library mirror that answers instantly.** "Which playlists is this song in?" is one request the Web API won't answer directly, and Spotify's new-app tier blocks most of the classic endpoints anyway. So Notch signs in with Authorization-Code-with-PKCE (no client secret; the redirect lands on a one-shot loopback server), mirrors your playlists into a local index, and keeps the mirror fresh cheaply by diffing each playlist's `snapshot_id`, refetching only what actually changed. Per-track lookups are then instant and work offline; likes and playlist edits apply optimistically and roll back if the write fails.
 
 **First-class trackpad feel.** Two-finger horizontal swipes switch tabs (with haptic ticks), respecting natural-scrolling direction, and a gesture monitor keeps the panel from fighting the system during live Space swipes.
 
-**Watching Claude Code without a daemon.** Claude Code runs a shell command on every lifecycle hook and pipes it JSON. Notch's hook is a ten-line script that stamps the payload with a timestamp and its parent pid and appends it to a spool file; `AgentSessionStore` tails the file with a kqueue vnode source (plus a 1 Hz poll as a safety net), replays it on launch, and folds fifteen hook events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`/`PostToolUse`, `PermissionRequest`, `Notification`, `Stop`/`StopFailure`, `SubagentStart`/`Stop`, `PreCompact`/`PostCompact`, `CwdChanged`, `SessionEnd`) into each session's state machine. Sessions are matched to their `claude` process by executable path via `sysctl` — the native binary's `p_comm` is its version string, so name matching doesn't work — and the terminal tab is found by tty (Terminal.app) or window title (VS Code). The hook is registered `async` with a 5 s timeout and always exits 0, so it can never block or fail a session; Claude Code hot-reloads hooks, so flipping the switch takes effect in sessions that are already running.
+**Watching Claude Code without a daemon.** Claude Code runs a shell command on every lifecycle hook and pipes it JSON. Notch's hook is a ten-line script that stamps the payload with a timestamp and its parent pid and appends it to a spool file; `AgentSessionStore` tails the file with a kqueue vnode source (plus a 1 Hz poll as a safety net), replays it on launch, and folds fifteen hook events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`/`PostToolUse`, `PermissionRequest`, `Notification`, `Stop`/`StopFailure`, `SubagentStart`/`Stop`, `PreCompact`/`PostCompact`, `CwdChanged`, `SessionEnd`) into each session's state machine. Sessions are matched to their `claude` process by executable path via `sysctl` — the native binary's `p_comm` is its version string, so name matching doesn't work — and the terminal tab is found by tty (Terminal.app) or window title (VS Code). The hook performs a short synchronous append with a 2 s timeout and emits no decisions. A separate transcript reader runs on a utility queue and recovers missed activity without depending on hook installation.
 
 **Guided permissions.** Instead of "go enable it in System Settings", the onboarding opens the exact privacy pane and floats a small overlay beside it showing what to do — an animated drag-into-the-list for Accessibility, a flip-the-toggle for Automation and Files & Folders — that tracks the Settings window and dismisses itself the moment the grant lands.
 
 ## Getting started
+
+Downloadable previews will be listed on [GitHub Releases](https://github.com/spitfiresb/notch/releases).
+Release builds target **Apple Silicon (M1 or later), macOS 14.2+**.
+
+If you have a preview DMG, drag **Notch.app** to **Applications**, eject the disk
+image, then open the installed app. If macOS blocks it, use Apple's documented
+[Open Anyway steps](https://support.apple.com/en-us/102445). These previews are
+ad-hoc signed and not notarized; updates may require granting permissions again.
+No Xcode or Homebrew is needed to run a downloaded app.
+
+Hover for playback controls and click to expand; the gear opens Settings. Open
+Notch from Applications again to find Settings. **Launch at login is opt-in.**
+Quit through Settings, and install updates by replacing the app while it is quit.
+See [installation help](docs/INSTALL.txt), [privacy and uninstall](PRIVACY.md),
+and the [release checklist](PUBLISH.md).
+
+To build from source:
 
 ```bash
 git clone https://github.com/spitfiresb/notch.git
@@ -162,15 +179,15 @@ cd notch
 ./build.sh run
 ```
 
-Requires **macOS 14.2+** (for the audio tap; everything else degrades gracefully) and Xcode command-line tools. No Xcode project needed; it's a plain Swift Package driven by `build.sh`. See [BUILD.md](BUILD.md) for the full build/run/debug workflow.
+Building requires **macOS 14.2+** and Xcode command-line tools with Swift 6 or later. No Xcode project needed; it's a plain Swift Package driven by `build.sh`. See [BUILD.md](BUILD.md) for the full build/run/debug workflow.
 
 On first launch an onboarding window walks through the permissions it wants:
 
 | Permission | Used for | Optional? |
 |---|---|---|
-| Accessibility | Keeping the notch above other windows and interactive; focusing Claude session windows | **Required** |
+| Accessibility | Keeping the notch above other windows and interactive; focusing Claude session windows | Recommended; setup can be deferred |
 | Automation (Spotify) | Track info + controls when MediaRemote is unavailable | Yes (if you don't use Spotify) |
-| Files & Folders (Desktop) | The screenshots tab, only if you keep saving screenshots to the Desktop | Yes — the default routes screenshots to `~/Pictures/Screenshots`, which needs no grant |
+| Files & Folders (Desktop) | The screenshots tab, only if you keep saving screenshots to the Desktop | Yes — choose “Use folder” to route screenshots to `~/Pictures/Screenshots` |
 
 The audio tap for the dancing bars prompts on its own the first time music plays; deny it and the bars fall back to a synthesized wiggle.
 
@@ -179,6 +196,14 @@ Two things are set up separately from these:
 ### Spotify account
 
 For the like button and saved-in panel: a standard OAuth login started from the notch's save button or Settings; the token lives in your keychain. Spotify's dev-mode rules mean you bring your own client ID — Settings → Spotify walks through creating the (free) app and pasting the ID in. Now-playing and playback control work without it.
+
+1. Open the [Spotify developer dashboard](https://developer.spotify.com/dashboard) and create your own app.
+2. Add the exact redirect URI `http://127.0.0.1:8888/callback`.
+3. Paste the Client ID into Settings → Spotify, choose Apply, then Connect.
+
+Spotify's [development-mode requirements](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
+include Premium for the app owner. This library feature is optional; skip it if
+you do not want that requirement. Changing the client ID signs you out.
 
 ### Claude Code sessions
 
@@ -189,13 +214,13 @@ Settings → Claude Code → **Show live Claude Code sessions**. Turning it on:
 
    ```json
    "Stop": [
-     { "hooks": [ { "type": "command", "command": "\"…/Notch/claude-hook.sh\"", "timeout": 5, "async": true } ] }
+     { "hooks": [ { "type": "command", "command": "'…/Notch/claude-hook.sh'", "timeout": 2 } ] }
    ]
    ```
 
-Your other hooks are left exactly as they were; turning the switch off removes only entries pointing at Notch's script. Events land in `~/Library/Application Support/Notch/claude-events.jsonl`, which Notch truncates after replaying on launch. Nothing leaves your machine — the hook appends to a local file, and Notch reads it.
+Other settings and hook entries are preserved; turning the switch off removes only commands exactly matching Notch's script. Before changing an existing settings file, Notch saves its original bytes under `~/Library/Application Support/Notch/settings-backups/`. Invalid or unreadable settings are left untouched and setup retries every 30 seconds while the app runs. `CLAUDE_CONFIG_DIR`, when present in Notch's environment, selects the settings directory. Events land in `~/Library/Application Support/Notch/claude-events.jsonl`, which Notch truncates after replaying on launch. Nothing leaves your machine — the hook appends to a local file, and Notch reads it.
 
-Sessions that are already running pick the hooks up without a restart. Terminal.app gets click-to-focus down to the exact tab and VS Code down to the window; any other host still shows up in the panel and is brought to the front on click.
+Monitoring starts independently of hook setup. The fallback follows transcripts identified by hook events, open file descriptors, or explicit session IDs in process arguments. It never assigns a historical chat just because it shares a project folder. When a process is visible but its activity cannot yet be read, the panel shows **detecting** with a static indicator and keeps retrying. Permission and subagent details still depend on hooks; exact activity cannot be reconstructed when neither source exposes it. Network silence is never treated as proof of interruption. Terminal.app gets click-to-focus down to the exact tab and VS Code down to the window; any other host still shows up in the panel and is brought to the front on click.
 
 ## Architecture
 
@@ -221,7 +246,8 @@ Sources/Notch/
     ├── AudioMeter.swift               CoreAudio process tap → 6-band levels
     ├── NowPlaying.swift               MediaRemote bridge + Spotify fallback
     ├── SpotifyLibrary.swift           Spotify Web API: OAuth (PKCE), library mirror, likes
-    ├── ClaudeHooks.swift              Installs/removes the Claude Code hook entries + spool script
+    ├── ClaudeHooks.swift              Preserves/backs up settings; installs/removes exact hook entries
+    ├── ClaudeSessionMonitor.swift     Independent process discovery and incremental transcript fallback
     ├── AgentSessions.swift            Shared Claude/Codex state, process identity, terminal focus
     ├── CodexHooks.swift               Removes legacy Notch hook definitions
     ├── CodexSessionMonitor.swift      Discovers Codex processes and tails open rollouts

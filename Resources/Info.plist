@@ -21,7 +21,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>14.2</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>
@@ -29,7 +29,7 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Notch needs to send Apple Events to Spotify so it can show the current song and control playback from the dynamic island.</string>
+	<string>Notch controls Spotify playback and focuses the Terminal or editor window you select in the sessions panel.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Notch listens to the system audio mix so the bars in the notch can react to whatever you're playing.</string>
 	<key>NSHumanReadableCopyright</key>

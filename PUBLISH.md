@@ -1,113 +1,136 @@
-# Publishing Notch
+# Preparing a download
 
-Plan for taking Notch from a personal app to something strangers can download,
-install, and use. This documents the decisions already made and the work
-remaining. See `BUILD.md` for the day-to-day build workflow.
+The no-fee release pipeline is implemented. A local candidate is **not yet a
+public-release sign-off**: complete the manual acceptance matrix below on the
+exact artifact before putting its URL on a website. No paid service, Developer
+ID, notarization, Sparkle account or Homebrew installation is needed to build.
 
-## Decisions
+## Build a candidate
 
-- **No Apple Developer fee (for now).** Ship ad-hoc signed. Users bypass
-  Gatekeeper via System Settings → Privacy & Security → "Open Anyway", or
-  avoid it entirely by installing through Homebrew. Revisit Developer ID +
-  notarization if the app gets traction — it can be added later without
-  changing anything else (users re-grant permissions once at the transition).
-  - Known cost: TCC grants (Accessibility / Automation / audio) attach to the
-    code signature, so with ad-hoc signing users may need to re-grant
-    permissions after each update. Developer ID would fix this.
-- **No Mac App Store.** Sandboxing would likely kill the system-audio capture
-  and complicate the Apple Events automation.
-- **Spotify: bring-your-own client ID.** Extended quota mode is closed to
-  individuals (organizations with 250k+ MAU only), and development mode is
-  capped at 5 allowlisted users. Since the OAuth flow is PKCE with a fixed
-  loopback redirect (`http://127.0.0.1:8888/callback`), users can create their
-  own free Spotify developer app and paste in their client ID. Caveat:
-  dev-mode apps require the owner to have Spotify Premium.
-- **Updates via GitHub Releases.** Lightweight launch-time check against the
-  Releases API; no Sparkle / auto-install for v1.
-- **Apple Silicon only.** Every notched Mac is arm64; a universal binary buys
-  nothing.
+Requirements: Apple Silicon Mac, Xcode command-line tools with Swift 6 or later.
+The downloadable app requires Apple Silicon and macOS 14.2 or later.
 
-## Work items
+`Resources/Info.plist` is the version/build source of truth. Update
+`CFBundleShortVersionString` (x.y.z) and increment `CFBundleVersion` for each
+published build. `Package.swift` and the plist both declare macOS 14.2; the
+artifact verifier checks the actual binary's deployment target too.
 
-### 1. Spotify: bring-your-own client ID
+```sh
+./build.sh release
+```
 
-- [x] Make the client ID a settings-backed value (UserDefaults-persisted on
-      `SpotifyLibrary`), defaulting to the current hardcoded ID so the
-      maintainer's build behaves exactly as today.
-- [x] Settings: Spotify section gained a "Use your own Spotify app" area with
-      the three-step walkthrough (create app → set redirect URI → paste
-      client ID) and an Apply field; status/disconnect already existed.
-- [x] 403s point at the walkthrough: both the Settings caption and the
-      saved-in panel's denied message send the user to Settings → Spotify.
-- [x] Degraded mode: the saved-in panel already showed a Connect prompt when
-      unauthenticated; now-playing / playback control (Apple Events) works
-      regardless — no Web API needed.
-- [x] Changing the client ID disconnects: clears the keychain refresh token
-      and the cached library index (tokens aren't valid across Spotify apps).
-- [x] Onboarding frames it as an add-on: core setup (accessibility, Spotify
-      control, screenshots) first, then an optional "Spotify Library" step —
-      connect via Settings or Skip; everything else works without it.
+This runs the tests, compiles an optimized arm64 executable, generates the
+original app icon, assembles and ad-hoc seals the bundle, and makes a compressed
+DMG containing Notch, an Applications shortcut, installation help and privacy
+notes. It mounts the DMG read-only to verify its contents, architecture, runtime
+dependencies and bundle integrity. It does not launch or install the app.
 
-### 2. Release build & packaging
+Output is `build/releases/Notch-VERSION-BUILD-arm64/`:
 
-- [ ] `build.sh release` (or a separate `release.sh`): release config,
-      version stamped into Info.plist from a single source of truth, ad-hoc
-      sign, produce a DMG (`hdiutil` or `create-dmg`).
-- [ ] App icon: design an `.icns`, add `CFBundleIconFile`. Without it,
-      permission dialogs and Settings rows show a blank generic icon.
+- `Notch-VERSION-BUILD-arm64.dmg`
+- `SHA256SUMS` (verify from that directory with `shasum -a 256 -c SHA256SUMS`)
+- `BUILD-INFO.txt` (commit, clean/dirty source status, compiler, SDK and checks)
+- `SOURCE-SHA256SUMS` (exact build/test/packaging input hashes, including new files)
 
-### 3. First-run hardening
+Existing version/build output is never overwritten. Move an earlier local
+candidate aside, or bump the build number. `./build.sh verify path/to/file.dmg`
+repeats the integrity checks. A dirty working tree is allowed for local testing,
+but is explicitly marked: commit the reviewed code and rebuild before release.
+The pipeline is repeatable, not a claim of byte-for-byte reproducible DMGs.
+It rejects source edits made during testing/building so the artifact matches
+the tested inputs.
 
-- [x] Move `notchLog` from `/tmp/notch.log` to `~/Library/Logs/Notch/`
-      (rotates at 5 MB since that directory survives reboots); chatty
-      per-frame gesture logging removed.
-- [ ] No-notch fallback: verify behavior on external displays and non-notch
-      Macs — floating pill at top-center, or a clearly stated requirement. At
-      minimum: no crash, nothing rendered off-screen.
-- [ ] Test full onboarding on a fresh macOS account (zero TCC grants): every
-      permission prompt appears; denial paths don't wedge the app.
-- [x] Screenshot folder: default routes to `~/Pictures/Screenshots` via the
-      system `screencapture` preference (no Files & Folders grant needed);
-      "Keep Desktop" remains as the permission-requiring alternative.
-- [x] Guided permission flow: onboarding opens the exact System Settings pane
-      with an overlay showing what to do (drag row / flip toggle) instead of
-      leaving the user to find it.
-- [ ] Audit for remaining personal assumptions (hardcoded paths etc.).
+## Completed without paid services
 
-### 4. Distribution & updates
+- Release/test/verify commands, checksums and build provenance.
+- Original icon at macOS icon sizes, installed version and sanitized app-info copy.
+- DMG/translocation launch guard before services start; reopening finds Settings;
+  a second installed copy redirects to the running app.
+- Login startup is opt-in and failures are visible. Existing registration is kept.
+- Setup can be deferred; the setup text describes actual features.
+- Screenshot routing remembers the original location and preserves external
+  changes; startup no longer changes the system screenshot thumbnail setting.
+- Log files rotate during use with restricted permissions. Session text and
+  Spotify token fragments are omitted from new operational logs.
+- Spotify uses only the user's client ID; disconnect cancels pending login and
+  clears the index; the OAuth listener binds to loopback only.
+- Privacy, installation, manual-update and uninstall instructions; issue template.
+- GitHub workflow for tests and downloadable candidate artifacts. It runs only
+  for a public repository to avoid paid private-repository minutes. No publishing
+  or release-write permission is granted.
 
-- [ ] GitHub Release `v0.1.0` with the DMG attached.
-- [ ] Optional: GitHub Action that builds and attaches the DMG on tag push,
-      so releases are reproducible.
-- [ ] Update check on launch (throttled ~daily) against the GitHub Releases
-      API; subtle "update available" affordance linking to the release page.
-- [ ] Homebrew cask in a personal tap (`spitfiresb/homebrew-tap`) so
-      `brew install --cask spitfiresb/tap/notch` works — brew skips the
-      quarantine flag, so this path has no Gatekeeper dialog at all.
+## Manual acceptance: required before the public link
 
-### 5. Docs for strangers
+Record the version, build, macOS, hardware and result in `docs/RELEASE-QA.md`.
+Automated tests do not stand in for TCC prompts, a real Finder install or display
+hardware. Use a fresh macOS user or a separate test Mac; do not reset permissions
+on your everyday account just to run this checklist.
 
-- [ ] README install section: brew one-liner + DMG with an "Open Anyway"
-      walkthrough (screenshot of the Settings dialog).
-- [x] Permissions section: what each TCC grant is for (README table); the
-      re-grant caveat under ad-hoc signing lives in BUILD.md.
-- [x] Claude Code sessions: its own README section with captures (spinner,
-      panel, Clawd toasts) and a setup subsection showing exactly what the
-      toggle writes to `~/.claude/settings.json`.
-- [ ] Spotify BYO-client-ID setup, mirrored from the in-app walkthrough
-      (README currently points at the in-app Settings walkthrough).
+- [ ] **Fresh install:** download through a browser (quarantine intact), open DMG,
+  drag to Applications, eject, launch, complete or defer setup, quit and reopen.
+  Launching inside the DMG should show installation help without installing hooks.
+- [ ] **Permissions:** independently deny/grant Accessibility, Spotify Automation,
+  screenshot-folder access and audio capture. No crash or stuck setup. Recover via
+  Settings. Verify first-run behavior with Spotify absent and with no CLI tools.
+- [ ] **OS coverage:** test macOS 14.2 (minimum), 15 and 26 before claiming those
+  releases work. Private MediaRemote/SkyLight/Multitouch APIs make this essential.
+  Record any untested versions explicitly in release notes.
+- [ ] **Displays:** built-in notch; non-notched external main display; switch main
+  display; unplug monitor; sleep/wake; full screen, Spaces and Mission Control.
+  Check top, left and right docks remain visible and clickable.
+- [ ] **Music:** play/pause/skip/seek with supported players; denied audio permission
+  leaves usable controls; no player and network offline stay responsive.
+- [ ] **Spotify Library (optional):** your own client ID; success, denial, wrong
+  redirect URI, occupied port 8888, disconnect during login, expired/revoked token,
+  offline/rate-limit behavior. The rest of the app works without this feature.
+- [ ] **Screenshots:** default and custom folder, routing on/off, clipboard on/off,
+  permission denial, cleanup cancel/confirm and restore from Trash. Confirm other
+  files are untouched and the prior screenshot folder is restored.
+- [ ] **Sessions:** no tools installed; existing and new Claude/Codex sessions;
+  complete/interrupt/permission/question; disable both integrations; verify other
+  Claude hooks/settings survive. Review any monitoring errors.
+- [ ] **Upgrade:** install over an earlier build while quit; settings/opt-outs remain;
+  renew any needed permissions; no duplicate app or login item.
+- [ ] **Long run:** Activity Monitor at idle and with multiple active sessions;
+  check CPU, memory growth, sleep/wake and logs after an extended session. No
+  universal idle-CPU promise based only on a development machine.
+- [ ] **Uninstall:** follow PRIVACY.md; no Notch hooks or login item left enabled;
+  screenshot files and unrelated settings survive.
+- [ ] **Rights and presentation:** choose a source/distribution license; review
+  third-party names, mascots and screenshots for publication. The new app icon is
+  original code-drawn artwork; this does not grant rights to third-party assets.
 
-### 6. Claude Code sessions (shipped in PR #13)
+## Publishing once acceptance passes
 
-- [x] Hook install/uninstall scoped to our own entries in `~/.claude/settings.json`.
-- [x] Spool-file transport, launch replay, pid-based dedupe, Terminal / VS Code focus.
-- [ ] Per-turn token counts (from transcript `usage`) in the session rows.
-- [ ] Stable dev signing (self-signed "Notch Dev" identity in `build.sh`) so the
-      keychain prompt stops firing on every rebuild — also helps the TCC caveat above.
-- [ ] Surface `error_type` in the failed-turn toast label.
+1. Commit the reviewed source, increment the build if needed, and rebuild from a
+   clean checkout. Review the artifact and `BUILD-INFO.txt`.
+2. Tag that commit `vVERSION`. Create a **draft** GitHub Release, describe tested
+   OS/hardware, limitations and known issues; attach DMG, SHA256SUMS and build info.
+3. Download and verify the attached artifact. Publish the release when ready.
+4. Add a download link to that release (or its asset) in the README/site. State
+   Apple Silicon, macOS 14.2+, manual updates and the first-open steps beside it.
 
-## Suggested order
+Until that release exists, docs link to the Releases page without claiming a
+public download is available. No release has been published by this work.
 
-1–2 are the real code, 3 is mostly testing plus two small changes, 4–5 are
-infrastructure and writing. Items needing a human: the fresh-account TCC test
-and icon design direction.
+Updates are manual for v0.1: Settings → Releases & updates opens GitHub. A
+throttled update notification, auto-updater, universal Intel build, Homebrew tap,
+per-turn token counts and new UI features are optional follow-ups, not blockers
+for a downloadable preview.
+
+## First-open and service constraints
+
+This build is ad-hoc signed and not notarized. Follow Apple's documented
+[Open Anyway steps](https://support.apple.com/en-us/102445); do not promise
+that Homebrew bypasses Gatekeeper. Permissions may need renewal after updates.
+Paid signing work is intentionally deferred.
+
+[GitHub standard hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+are free for public repositories; private repositories have usage allowances and
+potential charges, so the checked-in workflow skips them. Local release builds
+have no hosted-service cost.
+
+Spotify Library remains optional. Its own
+[development-mode restrictions](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
+include Premium for the app owner. Users who do not want that can skip library
+integration; Notch's basic playback and other features do not require it.
