@@ -215,6 +215,29 @@ struct SettingsView: View {
             } header: {
                 Text("Spotify")
             }
+            Section {
+                LabeledContent("Notch", value: AppInfo.versionDescription)
+                Text("Apple Silicon · macOS 14.2 or later")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Link("Releases & updates", destination: AppInfo.releasesURL)
+                    Link("Report an issue", destination: AppInfo.issuesURL)
+                    Link("Privacy", destination: AppInfo.privacyURL)
+                }
+                Text("Updates are installed manually. Notch does not send analytics or crash reports.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Copy app info") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(AppInfo.diagnostics, forType: .string)
+                    }
+                    Button("Run setup again…") { AppDelegate.shared?.showOnboarding() }
+                    Spacer()
+                    Button("Quit Notch") { NSApp.terminate(nil) }
+                }
+            } header: {
+                Text("About & support")
+            }
         }
         .formStyle(.grouped)
         .frame(width: 480, height: 560)
