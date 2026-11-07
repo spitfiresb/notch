@@ -17,24 +17,33 @@ struct ScreenshotTabView: View {
     @State private var settleWork: DispatchWorkItem?
 
     var body: some View {
-        if screenshots.shots.isEmpty {
-            EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here")
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Self.spacing) {
-                    ForEach(screenshots.shots, id: \.self) { url in
-                        ScreenshotThumb(url: url, activity: activity)
+        VStack(spacing: 4) {
+            if screenshots.shots.isEmpty {
+                EmptyTab(symbol: "camera.viewfinder", text: "Screenshots show up here")
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Self.spacing) {
+                        ForEach(screenshots.shots, id: \.self) { url in
+                            ScreenshotThumb(url: url, activity: activity, record: screenshots.records.first { $0.url == url })
+                        }
                     }
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: ScrollOffsetKey.self,
+                                               value: g.frame(in: .named(Self.space)).minX)
+                    })
                 }
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: ScrollOffsetKey.self,
-                                           value: g.frame(in: .named(Self.space)).minX)
-                })
+                .coordinateSpace(name: Self.space)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onPreferenceChange(ScrollOffsetKey.self) { minX in
+                    handleScroll(offset: minX)
+                }
             }
-            .coordinateSpace(name: Self.space)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onPreferenceChange(ScrollOffsetKey.self) { minX in
-                handleScroll(offset: minX)
+            if let issue = screenshots.issue {
+                HStack {
+                    Text(issue).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                    Button("Retry") { screenshots.refresh() }.buttonStyle(.plain)
+                        .disabled(screenshots.isRefreshing)
+                }.accessibilityElement(children: .contain)
             }
         }
     }
@@ -65,6 +74,7 @@ private struct ScrollOffsetKey: PreferenceKey {
 private struct ScreenshotThumb: View {
     let url: URL
     let activity: ScrollActivity
+    let record: ScreenshotScanner.Record?
     private let size = CGSize(width: 104, height: 64)
     @State private var image: NSImage?
     @State private var date: Date?
@@ -104,11 +114,13 @@ private struct ScreenshotThumb: View {
         .contextMenu {
             Button("Open") { NSWorkspace.shared.open(url) }
             Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            Button("Copy") { ScreenshotWatcher.copyToPasteboard(url) }
+            Button("Copy") { ScreenshotClipboard.shared.copy(url) }
         }
-        .task(id: url) {
-            image = await ScreenshotImage.thumbnail(for: url)
-            date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        .task(id: record) {
+            let loaded = await ScreenshotImage.thumbnail(for: url)
+            guard !Task.isCancelled else { return }
+            image = loaded
+            date = record?.stamp.date
         }
     }
 

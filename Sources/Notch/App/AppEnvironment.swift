@@ -47,13 +47,15 @@ final class AppEnvironment: ObservableObject {
                 }
             }
             .store(in: &cancellables)
-        ScreenshotWatcher.disableSystemFloatingThumbnail()
         screenshots.onNewScreenshot = { [weak self] url in
             guard let self else { return }
-            if self.settings.copyScreenshotToClipboard {
-                ScreenshotWatcher.copyToPasteboard(url)
-            }
             self.notch.presentScreenshotToast(url: url)
+            guard self.settings.copyScreenshotToClipboard else { return }
+            ScreenshotClipboard.shared.copy(url, canCommit: { [weak self] in
+                self?.settings.copyScreenshotToClipboard == true
+            }) { [weak self] outcome in
+                if outcome == .copied { self?.notch.markScreenshotCopied(url: url) }
+            }
         }
         // Re-point the filesystem watcher whenever the user flips auto-routing,
         // so the screenshot strip reflects the new folder without an app restart.
@@ -61,8 +63,15 @@ final class AppEnvironment: ObservableObject {
         settings.$routeScreenshotsToFolder
             .dropFirst()
             .removeDuplicates()
-            .sink { [weak self] _ in self?.screenshots.rebindToCurrentDirectory() }
+            .sink { [weak self] _ in
+                // @Published emits before didSet applies the system preference.
+                DispatchQueue.main.async { self?.screenshots.rebindToCurrentDirectory() }
+            }
             .store(in: &cancellables)
+        screenshots.onReset = { ScreenshotClipboard.shared.cancel() }
+        settings.$copyScreenshotToClipboard.dropFirst().sink { enabled in
+            if !enabled { ScreenshotClipboard.shared.cancel() }
+        }.store(in: &cancellables)
         screenshots.start()
         // Independent provider toggles feed one session panel and toast stream.
         settings.$claudeSessionsEnabled
@@ -100,7 +109,7 @@ final class AppEnvironment: ObservableObject {
     }
 }
 
-/// Transient "screenshot copied" banner shown in the notch.
+/// Transient screenshot capture/copy banner shown in the notch.
 struct ScreenshotToast: Equatable {
     let url: URL
     let message: String
@@ -287,14 +296,19 @@ final class NotchState: ObservableObject {
         scheduleClose(after: duration + 0.1)
     }
 
-    /// Pop the notch open with a "screenshot copied" banner; auto-collapses after a beat.
+    /// Capture feedback is immediate; clipboard success updates this same banner later.
     func presentScreenshotToast(url: URL) {
         closeWork?.cancel(); closeWork = nil
-        toast = .screenshot(ScreenshotToast(url: url, message: "Screenshot copied to clipboard"))
+        toast = .screenshot(ScreenshotToast(url: url, message: "Screenshot captured"))
         tab = .screenshots          // what's revealed if the banner is dismissed early
         isOpen = true
         pinnedUntil = Date().addingTimeInterval(2.25)
         scheduleClose(after: 2.35)
+    }
+
+    func markScreenshotCopied(url: URL) {
+        guard case .screenshot(let current) = toast, current.url == url else { return }
+        toast = .screenshot(ScreenshotToast(url: url, message: "Screenshot copied to clipboard"))
     }
 
     /// Pop the notch open with a Clawd banner for a session event.
