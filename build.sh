@@ -16,6 +16,8 @@ assemble() {
     mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
     cp "${BUILD_DIR}/${APP_NAME}" "${APP}/Contents/MacOS/${APP_NAME}"
     cp Resources/Info.plist "${APP}/Contents/Info.plist"
+    swift scripts/generate-icon.swift build/Notch.iconset
+    iconutil -c icns build/Notch.iconset -o "${APP}/Contents/Resources/Notch.icns"
     # ad-hoc sign so TCC (Accessibility / Automation) has something to attach grants to
     codesign --force --deep --sign - "${APP}" >/dev/null 2>&1 || true
     echo "→ built ${APP}"
