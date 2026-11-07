@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 /// Standalone preferences window for Notch. Currently scoped to the screenshot
 /// features; more sections will land here as toggleable behaviors get added.
@@ -24,6 +25,10 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if let error = settings.loginItemError {
+                    Text(error).font(.caption).foregroundStyle(.secondary)
+                }
+                Button("Open Login Items…") { SMAppService.openSystemSettingsLoginItems() }
             } header: {
                 Text("General")
             }
@@ -169,6 +174,10 @@ struct SettingsView: View {
                     Text("Finish logging in in your browser. If nothing happens, check that your Spotify app's redirect URI is exactly \(SpotifyLibrary.redirectURI).")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Button("Cancel login") { spotify.disconnect() }
+                }
+                if let error = spotify.connectionError {
+                    Text(error).font(.caption).foregroundStyle(.red)
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Set up your Spotify app")

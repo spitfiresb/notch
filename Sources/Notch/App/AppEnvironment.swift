@@ -85,7 +85,7 @@ final class AppEnvironment: ObservableObject {
             .sink { [weak self] on in self?.agents.setHooksEnabled(on, provider: .codex) }
             .store(in: &cancellables)
         agents.onAttention = { [weak self] s in
-            notchLog("sessions: attention \(s.projectName) \(s.state) \(s.attention ?? s.lastReply ?? "")")
+            notchLog("sessions: attention state=\(s.state)")
             let kind: SessionToast.Kind
             switch s.state {
             case .done:    kind = .complete

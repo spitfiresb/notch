@@ -1,34 +1,50 @@
 import Foundation
 
-/// NSLog from this SwiftPM executable doesn't reach the unified log on macOS 26,
-/// so debug breadcrumbs go to a flat file instead: `~/Library/Logs/Notch/notch.log`
-/// (`./build.sh logs` to follow).
-private let notchLogURL: URL = {
-    let fm = FileManager.default
-    let dir = fm.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/Notch", isDirectory: true)
-    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-    let url = dir.appendingPathComponent("notch.log")
-    // Unlike /tmp, ~/Library/Logs survives reboots — rotate once per launch
-    // so the file can't grow without bound.
-    if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 5_000_000 {
-        let old = dir.appendingPathComponent("notch.log.old")
-        try? fm.removeItem(at: old)
-        try? fm.moveItem(at: url, to: old)
-    }
-    return url
-}()
+/// A bounded, private log. Rotation happens during use, not only on relaunch.
+final class BoundedLog: @unchecked Sendable {
+    let url: URL
+    let limit: Int
+    private let lock = NSLock()
 
-func notchLog(_ msg: String) {
-    let line = "\(String(format: "%.3f", Date().timeIntervalSince1970)) \(msg)\n"
-    guard let data = line.data(using: .utf8) else { return }
-    let fm = FileManager.default
-    if !fm.fileExists(atPath: notchLogURL.path) {
-        fm.createFile(atPath: notchLogURL.path, contents: nil)
+    init(url: URL, limit: Int = 5_000_000) {
+        self.url = url
+        self.limit = limit
     }
-    if let fh = try? FileHandle(forWritingTo: notchLogURL) {
-        defer { _ = try? fh.close() }
-        _ = try? fh.seekToEnd()
-        try? fh.write(contentsOf: data)
+
+    func append(_ message: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let fm = FileManager.default
+        let directory = url.deletingLastPathComponent()
+        do {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o700])
+            // Limit individual records and remove the home path from incidental errors.
+            let cleaned = message.replacingOccurrences(of: fm.homeDirectoryForCurrentUser.path, with: "~")
+                .replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+            let line = "\(String(format: "%.3f", Date().timeIntervalSince1970)) \(cleaned.prefix(4096))\n"
+            let data = Data(line.utf8.prefix(limit))
+            // URL.resourceValues may reuse a cached size after repeated appends.
+            let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+            if size + data.count > limit {
+                let old = url.appendingPathExtension("old")
+                if fm.fileExists(atPath: old.path) { try fm.removeItem(at: old) }
+                if fm.fileExists(atPath: url.path) { try fm.moveItem(at: url, to: old) }
+                try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: old.path)
+            }
+            if !fm.fileExists(atPath: url.path) {
+                guard fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { return }
+            }
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } catch { /* Diagnostics must never interrupt the app. */ }
     }
 }
+
+private let log = BoundedLog(url: FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Logs/Notch/notch.log"))
+
+func notchLog(_ message: String) { log.append(message) }

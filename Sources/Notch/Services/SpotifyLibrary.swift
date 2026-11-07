@@ -13,10 +13,6 @@ import SwiftUI
 /// each playlist's `snapshot_id`, so the per-track lookup is instant and offline.
 @MainActor
 final class SpotifyLibrary: ObservableObject {
-    /// The maintainer's Spotify app. It's in Development mode, so only
-    /// allowlisted Spotify accounts can log in through it — everyone else
-    /// brings their own client ID (Settings → Spotify).
-    static let defaultClientID = "0660987f9ffe42c8bfd78a6325a15ebf"
     private static let customClientIDKey = "spotify.customClientID"
     static let redirectURI = "http://127.0.0.1:8888/callback"
     static let loopbackPort: UInt16 = 8888
@@ -43,6 +39,7 @@ final class SpotifyLibrary: ObservableObject {
     }
 
     @Published private(set) var state: ConnectionState = .disconnected
+    @Published private(set) var connectionError: String?
     /// Set when the API refuses us (403) — usually a Development-mode app being
     /// used by a Spotify account that isn't allowlisted. Cleared on any success.
     @Published private(set) var accessDenied = false
@@ -53,15 +50,13 @@ final class SpotifyLibrary: ObservableObject {
     /// Every writable playlist, index order (roughly most-recent-first from Spotify).
     @Published private(set) var allPlaylists: [PlaylistRef] = []
     /// User-supplied client ID for a bring-your-own Spotify developer app.
-    /// Empty = use the built-in default.
+    /// Empty = setup required. Distributed builds have no maintainer account.
     @Published private(set) var customClientID =
         UserDefaults.standard.string(forKey: SpotifyLibrary.customClientIDKey) ?? ""
 
-    private var clientID: String { customClientID.isEmpty ? Self.defaultClientID : customClientID }
+    private var clientID: String { customClientID }
 
-    /// True once the user has supplied their own client ID. The built-in default
-    /// only works for accounts allowlisted on the maintainer's app, so UI treats
-    /// "no custom ID" as "setup required" rather than offering a doomed login.
+    /// True once the user has supplied their own client ID.
     var hasClientID: Bool { !customClientID.isEmpty }
 
     /// Set (empty string = clear) the user's own client ID. Tokens aren't valid
@@ -72,7 +67,7 @@ final class SpotifyLibrary: ObservableObject {
         guard trimmed != customClientID else { return }
         customClientID = trimmed
         UserDefaults.standard.set(trimmed, forKey: Self.customClientIDKey)
-        notchLog("spotify: client ID changed to \(trimmed.isEmpty ? "built-in" : "custom") — disconnecting")
+        notchLog("spotify: client ID changed — disconnecting")
         disconnect()
     }
 
@@ -103,12 +98,14 @@ final class SpotifyLibrary: ObservableObject {
     private var accessExpiry = Date.distantPast
     private var loopback: LoopbackServer?
     private var loginTimeout: DispatchWorkItem?
+    private var generation = UUID()
 
-    private enum SpotifyError: Error { case notConnected, http(Int, String), badCallback }
+    private enum SpotifyError: Error { case notConnected, http(Int), badCallback }
 
     // MARK: - Lifecycle
 
     func start() {
+        guard hasClientID else { return }
         if let data = try? Data(contentsOf: Self.cacheURL),
            let decoded = try? JSONDecoder().decode(CacheFile.self, from: data) {
             cache = decoded
@@ -129,6 +126,9 @@ final class SpotifyLibrary: ObservableObject {
     }
 
     func disconnect() {
+        generation = UUID()
+        loginTimeout?.cancel(); loginTimeout = nil
+        loopback?.stop(); loopback = nil
         Keychain.delete(account: Keychain.refreshAccount)
         try? FileManager.default.removeItem(at: Self.cacheURL)
         accessToken = nil
@@ -138,8 +138,11 @@ final class SpotifyLibrary: ObservableObject {
         likedSet = []
         trackToPlaylists = [:]
         playlistCount = 0
+        allPlaylists = []
+        isSyncing = false
         lastSync = nil
         state = .disconnected
+        connectionError = nil
         let id = membership.trackID
         membership = Membership(trackID: id)
     }
@@ -154,14 +157,26 @@ final class SpotifyLibrary: ObservableObject {
             return
         }
         loginTimeout?.cancel(); loginTimeout = nil
+        generation = UUID()
+        let attempt = generation
         state = .connecting
+        connectionError = nil
         let verifier = Self.randomURLSafe(64)
         let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URL()
         let stateParam = Self.randomURLSafe(24)
 
         loopback?.stop()
-        loopback = LoopbackServer(port: Self.loopbackPort) { [weak self] code, returnedState, error in
+        loopback = LoopbackServer(port: Self.loopbackPort, onFailure: { [weak self] in
             Task { @MainActor in
+                guard let self, self.generation == attempt else { return }
+                self.loginTimeout?.cancel(); self.loginTimeout = nil
+                self.loopback?.stop(); self.loopback = nil
+                self.state = .disconnected
+                self.connectionError = "Could not listen on port 8888. Close other apps using that port and retry."
+            }
+        }) { [weak self] code, returnedState, error in
+            Task { @MainActor in
+                guard self?.generation == attempt else { return }
                 self?.handleCallback(code: code, returnedState: returnedState, error: error,
                                      expectedState: stateParam, verifier: verifier)
             }
@@ -169,6 +184,7 @@ final class SpotifyLibrary: ObservableObject {
         guard loopback != nil else {
             notchLog("spotify: couldn't open loopback port \(Self.loopbackPort)")
             state = .disconnected
+            connectionError = "Could not start Spotify login. Check that port 8888 is available."
             return
         }
 
@@ -189,6 +205,7 @@ final class SpotifyLibrary: ObservableObject {
             guard let self, self.state == .connecting else { return }
             self.loopback?.stop(); self.loopback = nil
             self.state = .disconnected
+            self.connectionError = "Spotify login timed out. Check your app's redirect URI and retry."
         }
         loginTimeout = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 300, execute: work)
@@ -196,15 +213,21 @@ final class SpotifyLibrary: ObservableObject {
 
     private func handleCallback(code: String?, returnedState: String?, error: String?,
                                 expectedState: String, verifier: String) {
+        guard state == .connecting, returnedState == expectedState else { return }
+        // Invalidate other queued callbacks from this listener before exchanging the code.
+        generation = UUID()
         loginTimeout?.cancel(); loginTimeout = nil
         loopback?.stop(); loopback = nil
         guard error == nil, let code, returnedState == expectedState else {
-            notchLog("spotify: login failed or denied (\(error ?? "state mismatch"))")
+            notchLog("spotify: login failed or denied")
             state = .disconnected
+            connectionError = "Spotify login was cancelled or denied. You can retry in Settings."
             return
         }
+        let attempt = generation
         Task {
             do {
+                guard generation == attempt else { return }
                 let token = try await tokenRequest(form: [
                     "grant_type": "authorization_code",
                     "code": code,
@@ -212,6 +235,7 @@ final class SpotifyLibrary: ObservableObject {
                     "client_id": clientID,
                     "code_verifier": verifier,
                 ])
+                guard generation == attempt else { return }
                 accessToken = token.access_token
                 accessExpiry = Date().addingTimeInterval(token.expires_in - 30)
                 if let refresh = token.refresh_token { Keychain.save(refresh, account: Keychain.refreshAccount) }
@@ -219,8 +243,10 @@ final class SpotifyLibrary: ObservableObject {
                 state = .connected
                 await sync(force: true)
             } catch {
+                guard generation == attempt else { return }
                 notchLog("spotify: token exchange failed: \(error)")
                 state = .disconnected
+                connectionError = "Spotify could not finish signing in. Check your client ID, redirect URI and connection, then retry."
             }
         }
     }
@@ -334,7 +360,8 @@ final class SpotifyLibrary: ObservableObject {
         guard state == .connected, !isSyncing else { return }
         if !force, let last = lastSync, Date().timeIntervalSince(last) < 600 { return }
         isSyncing = true
-        defer { isSyncing = false }
+        let attempt = generation
+        defer { if generation == attempt { isSyncing = false } }
         do {
             let me = try await currentUserID()
             var metas: [PlaylistMeta] = []
@@ -471,6 +498,7 @@ final class SpotifyLibrary: ObservableObject {
     private struct PlaylistRow: Decodable { let item: TrackRef? }
 
     private func validToken() async throws -> String {
+        let attempt = generation
         if let t = accessToken, accessExpiry > Date() { return t }
         guard let refresh = Keychain.load(account: Keychain.refreshAccount) else {
             throw SpotifyError.notConnected
@@ -481,11 +509,13 @@ final class SpotifyLibrary: ObservableObject {
                 "refresh_token": refresh,
                 "client_id": clientID,
             ])
+            guard generation == attempt else { throw CancellationError() }
             accessToken = token.access_token
             accessExpiry = Date().addingTimeInterval(token.expires_in - 30)
             if let newRefresh = token.refresh_token { Keychain.save(newRefresh, account: Keychain.refreshAccount) }
             return token.access_token
-        } catch SpotifyError.http(let code, _) where code == 400 || code == 401 {
+        } catch SpotifyError.http(let code) where code == 400 || code == 401 {
+            guard generation == attempt else { throw CancellationError() }
             // Refresh token revoked/expired — force a clean re-connect.
             disconnect()
             throw SpotifyError.notConnected
@@ -493,10 +523,12 @@ final class SpotifyLibrary: ObservableObject {
     }
 
     private func api(_ method: String, _ urlString: String, body: Data? = nil) async throws -> Data {
+        let currentGeneration = generation
         var attempt = 0
         while true {
             attempt += 1
             let token = try await validToken()
+            guard generation == currentGeneration else { throw CancellationError() }
             var req = URLRequest(url: URL(string: urlString)!)
             req.httpMethod = method
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -505,8 +537,9 @@ final class SpotifyLibrary: ObservableObject {
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             }
             let (data, resp) = try await URLSession.shared.data(for: req)
+            guard generation == currentGeneration else { throw CancellationError() }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            notchLog("spotify: \(method) \(urlString) -> \(code) tok=\(token.prefix(10))…")
+            notchLog("spotify: \(method) -> \(code)")
             if code == 403 { accessDenied = true }
             switch code {
             case 200...299:
@@ -516,9 +549,11 @@ final class SpotifyLibrary: ObservableObject {
                 accessToken = nil          // stale — refresh and retry once
             case 429 where attempt <= 3:
                 let wait = Double((resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After") ?? "1") ?? 1
-                try await Task.sleep(nanoseconds: UInt64((wait + 0.2) * 1_000_000_000))
+                let boundedWait = wait.isFinite ? min(60, max(0, wait)) : 1
+                try await Task.sleep(nanoseconds: UInt64((boundedWait + 0.2) * 1_000_000_000))
+                guard generation == currentGeneration else { throw CancellationError() }
             default:
-                throw SpotifyError.http(code, String(data: data, encoding: .utf8) ?? "")
+                throw SpotifyError.http(code)
             }
         }
     }
@@ -531,7 +566,7 @@ final class SpotifyLibrary: ObservableObject {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
-            throw SpotifyError.http(code, String(data: data, encoding: .utf8) ?? "")
+            throw SpotifyError.http(code)
         }
         return try JSONDecoder().decode(TokenResponse.self, from: data)
     }
@@ -569,11 +604,17 @@ private final class LoopbackServer: @unchecked Sendable {
     private var listener: NWListener?
     private let onCallback: (String?, String?, String?) -> Void   // code, state, error
 
-    init?(port: UInt16, onCallback: @escaping (String?, String?, String?) -> Void) {
+    init?(port: UInt16, onFailure: @escaping () -> Void,
+          onCallback: @escaping (String?, String?, String?) -> Void) {
         self.onCallback = onCallback
-        guard let p = NWEndpoint.Port(rawValue: port),
-              let listener = try? NWListener(using: .tcp, on: p) else { return nil }
+        guard let p = NWEndpoint.Port(rawValue: port) else { return nil }
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: p)
+        guard let listener = try? NWListener(using: parameters) else { return nil }
         self.listener = listener
+        listener.stateUpdateHandler = { state in
+            if case .failed = state { onFailure() }
+        }
         listener.newConnectionHandler = { [weak self] conn in
             conn.start(queue: .main)
             self?.receive(on: conn)
@@ -606,8 +647,8 @@ private final class LoopbackServer: @unchecked Sendable {
         // "GET /callback?code=...&state=... HTTP/1.1"
         let parts = requestLine.split(separator: " ")
         let target = parts.count >= 2 ? String(parts[1]) : ""
-        guard target.hasPrefix("/callback"),
-              let comps = URLComponents(string: "http://127.0.0.1\(target)") else {
+        guard parts.first == "GET", target.hasPrefix("/"),
+              let comps = URLComponents(string: "http://127.0.0.1\(target)"), comps.path == "/callback" else {
             respond(conn, status: "404 Not Found", body: "")
             return
         }
@@ -616,8 +657,8 @@ private final class LoopbackServer: @unchecked Sendable {
         <html><head><title>Notch</title></head>
         <body style="background:#111;color:#eee;font-family:-apple-system,sans-serif;\
         display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
-        <div style="text-align:center"><h2>Spotify connected to Notch</h2>
-        <p>You can close this tab and go back to your Mac.</p></div></body></html>
+        <div style="text-align:center"><h2>Return to Notch</h2>
+        <p>You can close this tab. Check Settings in Notch for the connection result.</p></div></body></html>
         """
         respond(conn, status: "200 OK", body: html)
         onCallback(q("code"), q("state"), q("error"))
