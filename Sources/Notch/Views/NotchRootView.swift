@@ -83,11 +83,19 @@ struct NotchRootView: View {
                 let rect = ScreenMetrics.blobRect(for: ghostDock, size: ScreenMetrics.collapsedSize(for: ghostDock))
                 let lit = ghostDock == notch.dragTarget
                 let shape = NotchShape(cornerInset: 8, bottomRadius: 10, edge: Self.edge(for: ghostDock))
+                // Two-tone so the ghost reads on any wallpaper or window: white
+                // dashes over a slightly wider dark dash (same phase) that shows
+                // as an edge on light backgrounds and vanishes on dark ones.
+                let dash: [CGFloat] = [5, 4]
                 shape
                     .fill(Color.white.opacity(lit ? 0.10 : 0.035))
                     .overlay(
-                        shape.stroke(Color.white.opacity(lit ? 0.65 : 0.26),
-                                     style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                        shape.stroke(Color.black.opacity(lit ? 0.55 : 0.28),
+                                     style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: dash))
+                    )
+                    .overlay(
+                        shape.stroke(Color.white.opacity(lit ? 0.85 : 0.45),
+                                     style: StrokeStyle(lineWidth: 1.5, dash: dash))
                     )
                     .frame(width: rect.width, height: rect.height)
                     .offset(x: rect.minX, y: rect.minY)
