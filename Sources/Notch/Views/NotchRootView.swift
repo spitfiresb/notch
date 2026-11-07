@@ -260,7 +260,7 @@ struct NotchRootView: View {
             if let toast = notch.toast {
                 Group {
                     switch toast {
-                    case .screenshot(let t): ScreenshotToastView(toast: t)
+                    case .screenshot(let t): ScreenshotToastView(toast: t).id(t.url)
                     case .session(let t):    SessionToastView(toast: t)
                     }
                 }

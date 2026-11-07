@@ -9,16 +9,24 @@ struct ScreenshotToastView: View {
     private static let lead = 0.34       // wait for the notch to finish expanding
     private static let perChar = 0.018
 
+    @State private var appeared = Date()
+
     var body: some View {
+        // Whatever part of the expand wait hasn't elapsed yet, so a message swap
+        // (captured → copied to clipboard) restarts cleanly without extra delay.
+        let lead = max(0, Self.lead - Date().timeIntervalSince(appeared))
         HStack(spacing: 9) {
-            CascadeText(text: toast.message, startDelay: Self.lead, perChar: Self.perChar)
+            CascadeText(text: toast.message, startDelay: lead, perChar: Self.perChar)
                 .font(.system(size: 12, weight: .semibold))
                 .kerning(-0.1)
                 .foregroundStyle(.white)
-            CircleCheckmark(delay: Self.lead + Double(toast.message.count) * Self.perChar + 0.04)
+            CircleCheckmark(delay: lead + Double(toast.message.count) * Self.perChar + 0.04)
                 .frame(width: 18, height: 18)
             Spacer(minLength: 0)
         }
+        // New message = fresh cascade; otherwise the old letters' slots get reused
+        // and any extra characters pop in un-animated.
+        .id(toast.message)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { NSWorkspace.shared.open(toast.url) }
