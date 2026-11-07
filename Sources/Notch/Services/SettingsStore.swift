@@ -7,9 +7,10 @@ import ServiceManagement
 /// that have to bridge into macOS itself.
 @MainActor
 final class SettingsStore: ObservableObject {
+    private let defaults: UserDefaults
     /// Copy each new screenshot to the system clipboard so it can be pasted immediately.
     @Published var copyScreenshotToClipboard: Bool {
-        didSet { UserDefaults.standard.set(copyScreenshotToClipboard, forKey: Keys.copyScreenshot) }
+        didSet { defaults.set(copyScreenshotToClipboard, forKey: Keys.copyScreenshot) }
     }
 
     /// Auto-route screenshots into `~/Pictures/Screenshots` instead of the Desktop,
@@ -30,29 +31,41 @@ final class SettingsStore: ObservableObject {
     }
 
     @Published private(set) var screenshotRoutingError: String?
+    @Published private(set) var loginItemError: String?
 
     /// Register the app as a login item so it comes back after restarts and
     /// shutdowns. Mirrors `SMAppService.mainApp` — the system is the source of
-    /// truth, UserDefaults just remembers whether we've done the initial opt-in.
+    /// truth. Registration only happens after an explicit toggle.
     @Published var launchAtLogin: Bool {
-        didSet { Self.applyLaunchAtLogin(enabled: launchAtLogin) }
+        didSet {
+            guard launchAtLogin != oldValue else { return }
+            do {
+                if launchAtLogin { try SMAppService.mainApp.register() }
+                else { try SMAppService.mainApp.unregister() }
+                loginItemError = SMAppService.mainApp.status == .requiresApproval
+                    ? "Allow Notch in System Settings → General → Login Items." : nil
+            } catch {
+                loginItemError = "Could not update launch at login. Install Notch in Applications and check System Settings → General → Login Items."
+            }
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 
     /// Show live Claude Code sessions in the notch. Installs hook entries into
     /// ~/.claude/settings.json (removed again when turned off).
     @Published var claudeSessionsEnabled: Bool {
-        didSet { UserDefaults.standard.set(claudeSessionsEnabled, forKey: Keys.claudeSessions) }
+        didSet { defaults.set(claudeSessionsEnabled, forKey: Keys.claudeSessions) }
     }
 
     @Published var codexSessionsEnabled: Bool {
-        didSet { UserDefaults.standard.set(codexSessionsEnabled, forKey: Keys.codexSessions) }
+        didSet { defaults.set(codexSessionsEnabled, forKey: Keys.codexSessions) }
     }
 
     /// How far the podcast transport buttons jump, in seconds. Spotify's own player
     /// is fixed at 15 both ways; 30 is the other interval people reach for, so we
     /// offer both rather than hard-coding one.
     @Published var podcastSkipSeconds: Int {
-        didSet { UserDefaults.standard.set(podcastSkipSeconds, forKey: Keys.podcastSkip) }
+        didSet { defaults.set(podcastSkipSeconds, forKey: Keys.podcastSkip) }
     }
 
     /// The intervals offered in Settings. `gobackward.N` / `goforward.N` SF Symbols
@@ -63,7 +76,6 @@ final class SettingsStore: ObservableObject {
         static let claudeSessions = "settings.claudeSessionsEnabled"
         static let codexSessions = "settings.codexSessionsEnabled"
         static let copyScreenshot = "settings.copyScreenshotToClipboard"
-        static let launchAtLoginSeeded = "settings.launchAtLogin.seeded"
         static let podcastSkip = "settings.podcastSkipSeconds"
     }
 
@@ -72,8 +84,8 @@ final class SettingsStore: ObservableObject {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures/Screenshots")
     }
 
-    init() {
-        let defaults = UserDefaults.standard
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         // First launch: clipboard-copy preserves the prior always-on behavior.
         if defaults.object(forKey: Keys.copyScreenshot) == nil {
             defaults.set(true, forKey: Keys.copyScreenshot)
@@ -94,32 +106,7 @@ final class SettingsStore: ObservableObject {
         // Routing reflects the live system pref — the user (or this app) may have
         // already pointed `screencapture` somewhere; mirror reality, don't overwrite it.
         routeScreenshotsToFolder = Self.detectScreenshotRouting()
-        // First launch: opt in to launch-at-login once so the app survives
-        // restarts out of the box. After that, mirror the system's status so a
-        // user who removed us in System Settings isn't silently re-added.
-        if defaults.bool(forKey: Keys.launchAtLoginSeeded) {
-            launchAtLogin = SMAppService.mainApp.status == .enabled
-        } else {
-            defaults.set(true, forKey: Keys.launchAtLoginSeeded)
-            launchAtLogin = true
-            Self.applyLaunchAtLogin(enabled: true)
-        }
-    }
-
-    private static func applyLaunchAtLogin(enabled: Bool) {
-        do {
-            if enabled {
-                if SMAppService.mainApp.status != .enabled {
-                    try SMAppService.mainApp.register()
-                }
-            } else {
-                if SMAppService.mainApp.status == .enabled {
-                    try SMAppService.mainApp.unregister()
-                }
-            }
-        } catch {
-            notchLog("launch-at-login \(enabled ? "register" : "unregister") failed: \(error)")
-        }
+        launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     /// True when `com.apple.screencapture.location` is already our managed path.

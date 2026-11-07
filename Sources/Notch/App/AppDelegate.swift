@@ -367,6 +367,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func dockDragEnded() { dragController?.end() }
 
     func showOnboarding() {
+        if let onboarding {
+            onboarding.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         let controller = OnboardingWindowController(
             settings: env.settings,
             spotify: env.spotify,
@@ -400,5 +405,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettingsWindow() {
         SettingsWindowController.present(settings: env.settings, spotify: env.spotify, agents: env.agents)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if UserDefaults.standard.bool(forKey: "didCompleteOnboarding") { showSettingsWindow() }
+        else { showOnboarding() }
+        return true
     }
 }

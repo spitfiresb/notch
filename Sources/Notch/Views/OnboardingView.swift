@@ -89,7 +89,7 @@ struct OnboardingView: View {
         case .welcome:
             page(icon: "rectangle.topthird.inset.filled",
                  title: "Your Mac's notch",
-                 body: "Notch adds a dynamic island to the top of your screen — music controls, a screenshot tray, and clipboard history.\n\nA few macOS permissions make it work. Let's set them up.")
+                 body: "Music controls, recent screenshots, and local Claude Code and Codex activity — at the edge of your screen.\n\nSession monitoring is on by default; Claude monitoring adds local hooks. You can turn either integration off in Settings.")
         case .permissions:
             permissionsStep
         case .library:
@@ -112,7 +112,7 @@ struct OnboardingView: View {
         case .done:
             page(icon: "checkmark.circle.fill",
                  title: "All set",
-                 body: "Hover over the notch any time to open it. You can re-run this setup later from the gear tab.")
+                 body: "Hover for playback controls, then click the notch to expand it. The gear opens Settings.\n\nEnable launch at login there if you'd like. Open Notch from Applications any time to find Settings again.")
         }
     }
 
@@ -169,8 +169,9 @@ struct OnboardingView: View {
             Spacer(minLength: 0)
 
             if snapshot.accessibility != .granted {
-                Text("Accessibility is required — the rest can wait.")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                Button("Set up later") { move(1) }
+                    .font(.caption2)
+                    .help("Some interactions and window focusing may be limited until permission is granted.")
             }
         }
     }
