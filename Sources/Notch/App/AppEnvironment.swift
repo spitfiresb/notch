@@ -73,6 +73,9 @@ final class AppEnvironment: ObservableObject {
             if !enabled { ScreenshotClipboard.shared.cancel() }
         }.store(in: &cancellables)
         screenshots.start()
+        #if DEBUG
+        installDebugScreenshotToastTrigger()
+        #endif
         // Independent provider toggles feed one session panel and toast stream.
         settings.$claudeSessionsEnabled
             .dropFirst()
@@ -107,6 +110,33 @@ final class AppEnvironment: ObservableObject {
         agents.start(claudeEnabled: settings.claudeSessionsEnabled,
                      codexEnabled: settings.codexSessionsEnabled)
     }
+
+    #if DEBUG
+    static let debugScreenshotToastNotification = "com.spitfiresb.notch.debug.screenshot-toast"
+
+    /// Debug builds only: `notifyutil -p com.spitfiresb.notch.debug.screenshot-toast`
+    /// plays the capture → copied banner without taking a screenshot or touching the clipboard.
+    private func installDebugScreenshotToastTrigger() {
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, _, _, _ in
+                guard let observer else { return }
+                let env = Unmanaged<AppEnvironment>.fromOpaque(observer).takeUnretainedValue()
+                DispatchQueue.main.async { MainActor.assumeIsolated { env.playDebugScreenshotToast() } }
+            },
+            Self.debugScreenshotToastNotification as CFString, nil, .deliverImmediately)
+    }
+
+    private func playDebugScreenshotToast() {
+        let url = screenshots.shots.first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("debug-screenshot-\(UUID().uuidString).png")
+        notch.presentScreenshotToast(url: url)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.notch.markScreenshotCopied(url: url)
+        }
+    }
+    #endif
 }
 
 /// Transient screenshot capture/copy banner shown in the notch.
